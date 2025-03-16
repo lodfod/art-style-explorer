@@ -13,7 +13,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from src.utils.wikiart_dataloader import WikiArtDataset
 from src.preprocessing.edge_detection import extract_edges, extract_edges_gpu, preprocess_image, detect_contours
-from src.preprocessing.line_features import extract_line_features
+from src.features.line_features import extract_line_features
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

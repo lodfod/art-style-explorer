@@ -239,7 +239,7 @@ class WikiArtDataset:
                     if extract_features:
                         contours = detect_contours(edges)
                         
-                        from src.preprocessing.line_features import extract_line_features
+                        from src.features.line_features import extract_line_features
                         features = extract_line_features(edges, contours)
                     
                     # Create result entry
