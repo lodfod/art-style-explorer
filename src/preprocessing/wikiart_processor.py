@@ -139,7 +139,7 @@ def main():
         for _, row in batch_df.iterrows():
             try:
                 # Download image
-                img_path = dataset._download_image(row['URL'])
+                img_path = dataset.download_image(row['Link'], row['Artwork'])
                 if img_path is None:
                     continue
                 
@@ -190,7 +190,7 @@ def main():
                 results.append(processed_item)
                 
             except Exception as e:
-                logger.warning(f"Error processing image from {row['URL']}: {e}")
+                logger.warning(f"Error processing image from {row['Link']}: {e}")
         
         return results
     
