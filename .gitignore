@@ -174,4 +174,5 @@ cython_debug/
 .pypirc
 
 
-data/
+data/image_cache/
+data/processed/

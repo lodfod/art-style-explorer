@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from typing import List, Dict, Tuple, Any, Optional
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from src.preprocessing.edge_detection import process_artwork, detect_contours, analyze_contours
 from src.preprocessing.normalization import standardize_artwork

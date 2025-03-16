@@ -227,6 +227,21 @@ class WikiArtDataset:
                     # Extract line features if requested
                     if extract_features:
                         line_features = extract_line_features(edges)
+                        
+                        # Ensure all required features have valid numeric values
+                        required_features = [
+                            'line_count', 
+                            'mean_length', 
+                            'std_length',
+                            'intersection_count'
+                        ]
+                        
+                        # Convert any missing features to numeric defaults
+                        for feature in required_features:
+                            # If feature is missing or has non-numeric value, set to 0
+                            if feature not in line_features or not isinstance(line_features[feature], (int, float)):
+                                line_features[feature] = 0
+                                
                         result_entry['features'] = line_features
                     
                     results[artwork_id] = result_entry
@@ -273,12 +288,13 @@ class WikiArtDataset:
             # Save features if available
             if 'features' in data:
                 features_path = os.path.join(features_dir, f"{safe_id}.npy")
+                # Make sure all feature values are numeric
                 feature_array = np.array([
                     data['features'].get('line_count', 0),
-                    data['features'].get('avg_line_length', 0),
-                    data['features'].get('line_length_std', 0),
-                    data['features'].get('avg_line_angle', 0),
-                    data['features'].get('line_angle_std', 0),
+                    data['features'].get('mean_length', 0),  # Changed from avg_line_length
+                    data['features'].get('std_length', 0),   # Changed from line_length_std
+                    data['features'].get('mean_angle', 0),   # Changed from avg_line_angle
+                    data['features'].get('std_angle', 0),    # Changed from line_angle_std
                     data['features'].get('intersection_count', 0)
                 ])
                 np.save(features_path, feature_array)
