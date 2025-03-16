@@ -138,29 +138,53 @@ def main():
         results = []
         for _, row in batch_df.iterrows():
             try:
+                # Create a safe filename from the artwork ID
+                artwork_id = str(row['Artwork'])
+                safe_id = ''.join(c if c.isalnum() else '_' for c in artwork_id)
+                
                 # Download image
-                img_path = dataset.download_image(row['Link'], row['Artwork'])
-                if img_path is None:
+                img = dataset.download_image(row['Link'], safe_id)
+                if img is None:
                     continue
+                
+                # Convert PIL image to numpy array for OpenCV
+                img_array = np.array(img)
+                
+                # Handle grayscale images
+                if len(img_array.shape) == 2:
+                    img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
+                elif len(img_array.shape) == 3 and img_array.shape[2] == 4:
+                    # Convert RGBA to RGB
+                    img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
+                
+                # Create a temporary file path for reference
+                img_path = os.path.join(args.cache_dir, f"{safe_id}.jpg")
                 
                 # Process image (with GPU if available)
                 if use_gpu:
-                    preprocessed, edges = process_image_with_gpu(
-                        img_path, 
-                        target_size=(args.target_size, args.target_size),
-                        edge_method=args.edge_method
-                    )
+                    # Preprocess the image directly from the array
+                    gray = preprocess_image(img_array, target_size=(args.target_size, args.target_size))
+                    
+                    # Use GPU edge detection
+                    edges = extract_edges_gpu(gray, method=args.edge_method)
+                    preprocessed = gray
                     
                     # Fall back to CPU if GPU processing failed
-                    if preprocessed is None:
+                    if edges is None:
                         from src.preprocessing.edge_detection import process_artwork
+                        # Save the image temporarily if needed for process_artwork
+                        if not os.path.exists(img_path):
+                            img.save(img_path)
                         preprocessed, edges = process_artwork(
                             img_path, 
                             target_size=(args.target_size, args.target_size),
                             edge_method=args.edge_method
                         )
                 else:
-                    from src.preprocessing.edge_detection import process_artwork
+                    # Use CPU processing
+                    # Save the image temporarily if needed for process_artwork
+                    if not os.path.exists(img_path):
+                        img.save(img_path)
                     preprocessed, edges = process_artwork(
                         img_path, 
                         target_size=(args.target_size, args.target_size),
