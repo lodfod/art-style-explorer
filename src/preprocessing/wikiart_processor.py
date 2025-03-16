@@ -154,11 +154,10 @@ def main():
     # Get subsamples if requested
     data = dataset.data
     if args.sample_size is not None:
-        # Sample while preserving class distribution
         data = data.groupby('Style', group_keys=False).apply(
-            lambda x: x.sample(min(len(x), max(1, int(args.sample_size * len(x) / len(data)))))
-        )
-    
+            lambda x: x.sample(min(len(x), max(1, int(args.sample_size * len(x) / len(dataset.data)))))
+        logger.info(f"Sampled dataset to {len(data)} entries")
+
     # Split the dataset
     train_df, val_df, test_df = dataset.split_dataset(
         train_ratio=args.train_ratio,
