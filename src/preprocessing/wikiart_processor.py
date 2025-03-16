@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import cv2
 import torch
+from PIL import Image
 
 import sys
 import os
@@ -84,6 +85,48 @@ def process_image_with_gpu(image_path, target_size, edge_method):
         return None, None
 
 
+def save_image_safely(img, path):
+    """
+    Save an image safely handling different color modes
+    
+    Args:
+        img: PIL Image object
+        path: Path to save the image
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        # Get image mode
+        mode = img.mode
+        
+        if mode == 'RGBA':
+            # Save RGBA images as PNG
+            png_path = os.path.splitext(path)[0] + '.png'
+            img.save(png_path, 'PNG')
+            return png_path
+        elif mode == 'CMYK':
+            # Convert CMYK to RGB
+            rgb_img = img.convert('RGB')
+            rgb_img.save(path, 'JPEG')
+            return path
+        elif mode == 'P':
+            # Convert Palette to RGB
+            rgb_img = img.convert('RGB')
+            rgb_img.save(path, 'JPEG')
+            return path
+        else:
+            # Save RGB or other modes as JPEG
+            img.save(path, 'JPEG')
+            return path
+    except Exception as e:
+        logger.warning(f"Error saving image to {path}: {e}")
+        return None
+
+
 def main():
     """Main function to process the WikiArt dataset"""
     args = parse_args()
@@ -147,6 +190,14 @@ def main():
                 if img is None:
                     continue
                 
+                # Save the image temporarily for processing
+                img_path = os.path.join(args.cache_dir, f"{safe_id}.jpg")
+                saved_path = save_image_safely(img, img_path)
+                
+                if saved_path is None:
+                    logger.warning(f"Failed to save image for {artwork_id}")
+                    continue
+                
                 # Convert PIL image to numpy array for OpenCV
                 img_array = np.array(img)
                 
@@ -154,19 +205,8 @@ def main():
                 if len(img_array.shape) == 2:
                     img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
                 elif len(img_array.shape) == 3 and img_array.shape[2] == 4:
-                    # Check if image has transparency (RGBA)
-                    has_transparency = img_array[:,:,3].min() < 255
-                    
                     # Convert RGBA to RGB
                     img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
-                
-                # Create a temporary file path for reference
-                if 'has_transparency' in locals() and has_transparency:
-                    # Use PNG for images with transparency
-                    img_path = os.path.join(args.cache_dir, f"{safe_id}.png")
-                else:
-                    # Use JPEG for regular images
-                    img_path = os.path.join(args.cache_dir, f"{safe_id}.jpg")
                 
                 # Process image (with GPU if available)
                 if use_gpu:
@@ -179,29 +219,15 @@ def main():
                     
                     # Fall back to CPU if GPU processing failed
                     if edges is None:
-                        # Save the image temporarily if needed for process_artwork
-                        if not os.path.exists(img_path):
-                            # Save as PNG or JPEG based on file extension
-                            if img_path.endswith('.png'):
-                                img.save(img_path, 'PNG')
-                            else:
-                                img.save(img_path, 'JPEG')
                         preprocessed, edges = process_artwork(
-                            img_path, 
+                            saved_path, 
                             target_size=(args.target_size, args.target_size),
                             edge_method=args.edge_method
                         )
                 else:
                     # Use CPU processing
-                    # Save the image temporarily if needed for process_artwork
-                    if not os.path.exists(img_path):
-                        # Save as PNG or JPEG based on file extension
-                        if img_path.endswith('.png'):
-                            img.save(img_path, 'PNG')
-                        else:
-                            img.save(img_path, 'JPEG')
                     preprocessed, edges = process_artwork(
-                        img_path, 
+                        saved_path, 
                         target_size=(args.target_size, args.target_size),
                         edge_method=args.edge_method
                     )
@@ -220,7 +246,7 @@ def main():
                     'id': row.name,
                     'style': style_name,
                     'style_id': style_id,
-                    'original_path': img_path,
+                    'original_path': saved_path,
                     'preprocessed': preprocessed,
                     'edges': edges,
                     'features': features

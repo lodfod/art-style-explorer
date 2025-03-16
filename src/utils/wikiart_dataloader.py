@@ -132,13 +132,20 @@ class WikiArtDataset:
         # Create a safe filename
         safe_id = ''.join(c if c.isalnum() else '_' for c in artwork_id)
         cache_path = os.path.join(self.cache_dir, f"{safe_id}.jpg")
+        cache_path_png = os.path.join(self.cache_dir, f"{safe_id}.png")
         
-        # Check if image is already cached
+        # Check if image is already cached (check both jpg and png)
         if os.path.exists(cache_path):
             try:
                 return Image.open(cache_path)
             except Exception as e:
                 logger.warning(f"Error loading cached image {cache_path}: {e}")
+                # If loading fails, try downloading again
+        elif os.path.exists(cache_path_png):
+            try:
+                return Image.open(cache_path_png)
+            except Exception as e:
+                logger.warning(f"Error loading cached image {cache_path_png}: {e}")
                 # If loading fails, try downloading again
                 
         # Download the image
@@ -148,9 +155,7 @@ class WikiArtDataset:
             
             img = Image.open(BytesIO(response.content))
             
-            # Save to cache
-            img.save(cache_path)
-            
+            # Return the PIL Image without saving
             return img
             
         except Exception as e:
@@ -274,12 +279,12 @@ class WikiArtDataset:
         logger.info(f"Processed {len(results)} images successfully")
         return results
     
-    def save_processed_data(self, processed_data: Dict[str, Dict[str, Any]], output_dir: str):
+    def save_processed_data(self, processed_data: List[Dict[str, Any]], output_dir: str):
         """
         Save processed image data to disk
         
         Args:
-            processed_data: Dictionary of processed image data
+            processed_data: List of processed image data dictionaries
             output_dir: Directory to save processed data
         """
         # Create output directories
@@ -295,41 +300,47 @@ class WikiArtDataset:
         # Save metadata
         metadata = []
         
-        for artwork_id, data in tqdm(processed_data.items(), desc="Saving processed data"):
-            # Create safe filename
-            safe_id = ''.join(c if c.isalnum() else '_' for c in artwork_id)
-            
-            # Save preprocessed image
-            preprocessed_path = os.path.join(preprocessed_dir, f"{safe_id}.jpg")
-            cv2.imwrite(preprocessed_path, data['preprocessed'])
-            
-            # Save edge image
-            edges_path = os.path.join(edges_dir, f"{safe_id}.jpg")
-            cv2.imwrite(edges_path, data['edges'])
-            
-            # Save features if available
-            if 'features' in data:
-                features_path = os.path.join(features_dir, f"{safe_id}.npy")
-                # Make sure all feature values are numeric
-                feature_array = np.array([
-                    data['features'].get('line_count', 0),
-                    data['features'].get('mean_length', 0),  # Changed from avg_line_length
-                    data['features'].get('std_length', 0),   # Changed from line_length_std
-                    data['features'].get('mean_angle', 0),   # Changed from avg_line_angle
-                    data['features'].get('std_angle', 0),    # Changed from line_angle_std
-                    data['features'].get('intersection_count', 0)
-                ])
-                np.save(features_path, feature_array)
-            
-            # Add to metadata
-            metadata.append({
-                'artwork_id': artwork_id,
-                'style': data['style'],
-                'style_id': data['style_id'],
-                'preprocessed_path': os.path.relpath(preprocessed_path, output_dir),
-                'edges_path': os.path.relpath(edges_path, output_dir),
-                'features_path': os.path.relpath(features_path, output_dir) if 'features' in data else None
-            })
+        for item in tqdm(processed_data, desc="Saving processed data"):
+            try:
+                # Get artwork ID
+                artwork_id = item['id']
+                safe_id = ''.join(c if c.isalnum() else '_' for c in str(artwork_id))
+                
+                # Save preprocessed image
+                preprocessed_path = os.path.join(preprocessed_dir, f"{safe_id}.jpg")
+                cv2.imwrite(preprocessed_path, item['preprocessed'])
+                
+                # Save edge image
+                edges_path = os.path.join(edges_dir, f"{safe_id}.jpg")
+                cv2.imwrite(edges_path, item['edges'])
+                
+                # Save features if available
+                features_path = None
+                if 'features' in item and item['features'] is not None:
+                    features_path = os.path.join(features_dir, f"{safe_id}.npy")
+                    # Make sure all feature values are numeric
+                    feature_array = np.array([
+                        item['features'].get('line_count', 0),
+                        item['features'].get('mean_length', 0),
+                        item['features'].get('std_length', 0),
+                        item['features'].get('mean_angle', 0),
+                        item['features'].get('std_angle', 0),
+                        item['features'].get('intersection_count', 0)
+                    ], dtype=np.float32)
+                    np.save(features_path, feature_array)
+                
+                # Add to metadata
+                metadata.append({
+                    'artwork_id': artwork_id,
+                    'style': item['style'],
+                    'style_id': item['style_id'],
+                    'preprocessed_path': os.path.relpath(preprocessed_path, output_dir),
+                    'edges_path': os.path.relpath(edges_path, output_dir),
+                    'features_path': os.path.relpath(features_path, output_dir) if features_path else None,
+                    'original_path': item.get('original_path', None)
+                })
+            except Exception as e:
+                logger.warning(f"Error saving processed data for item {item.get('id', 'unknown')}: {e}")
         
         # Save metadata as CSV
         metadata_df = pd.DataFrame(metadata)
