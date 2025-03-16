@@ -8,6 +8,7 @@ import numpy as np
 from typing import Dict, List, Tuple, Any, Optional, Callable
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from torch.cuda.amp import autocast
 
 from .network import ArtStyleNetwork
 
@@ -172,192 +173,237 @@ class ContrastiveLoss(nn.Module):
         return loss
 
 
-def train_model(model: nn.Module,
-               train_loader: DataLoader,
-               val_loader: Optional[DataLoader] = None,
-               num_epochs: int = 50,
-               learning_rate: float = 1e-4,
-               weight_decay: float = 1e-5,
-               device: str = 'cuda',
-               checkpoint_dir: str = 'checkpoints',
-               log_interval: int = 10) -> Dict[str, List[float]]:
+def train_model(model, train_loader, val_loader, num_epochs=50, learning_rate=1e-4, 
+               weight_decay=1e-5, device='cuda', checkpoint_dir=None, 
+               use_mixed_precision=False, scaler=None):
     """
-    Train the art style network
+    Train the art style model
     
     Args:
-        model: The art style network model
+        model: The model to train
         train_loader: DataLoader for training data
-        val_loader: Optional DataLoader for validation data
+        val_loader: DataLoader for validation data
         num_epochs: Number of training epochs
-        learning_rate: Learning rate for the optimizer
-        weight_decay: Weight decay for the optimizer
-        device: Device to use for training ('cuda' or 'cpu')
-        checkpoint_dir: Directory to save model checkpoints
-        log_interval: Logging interval (in batches)
+        learning_rate: Learning rate for optimizer
+        weight_decay: Weight decay for regularization
+        device: Device to use for training
+        checkpoint_dir: Directory to save checkpoints
+        use_mixed_precision: Whether to use mixed precision training (faster on newer GPUs)
+        scaler: GradScaler for mixed precision training
         
     Returns:
-        Dictionary of training and validation metrics
+        Dictionary of training metrics
     """
-    # Make sure checkpoint directory exists
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    # Initialize model and move to device
+    # Set device
+    device = torch.device(device)
     model = model.to(device)
     
     # Define loss functions
-    classification_loss_fn = nn.CrossEntropyLoss()
-    contrastive_loss_fn = ContrastiveLoss()
+    classification_loss = nn.CrossEntropyLoss()
+    contrastive_loss = ContrastiveLoss()
     
     # Define optimizer
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     
     # Learning rate scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+        optimizer, mode='max', factor=0.5, patience=5, verbose=True
     )
     
     # Initialize metrics
     metrics = {
         'train_loss': [],
-        'train_acc': [],
+        'train_accuracy': [],
         'val_loss': [],
-        'val_acc': []
+        'val_accuracy': [],
+        'learning_rates': [],
+        'best_val_accuracy': 0.0,
+        'best_epoch': 0
     }
     
     # Training loop
     for epoch in range(num_epochs):
+        epoch_start_time = time.time()
+        
         # Training phase
         model.train()
         train_loss = 0.0
         train_correct = 0
         train_total = 0
         
-        # Progress bar for training
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs} [Train]')
+        # Create progress bar
+        train_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Train]")
         
-        for batch_idx, batch in enumerate(pbar):
-            # Get data
-            images = batch['image'].to(device)
-            comp_features = batch['composition_features'].to(device)
-            labels = batch['artist_label'].to(device)
+        for images, features, labels in train_bar:
+            # Move data to device
+            images = images.to(device)
+            if features is not None:
+                features = features.to(device)
+            labels = labels.to(device)
             
-            # Forward pass
+            # Zero the gradients
             optimizer.zero_grad()
-            embeddings, logits = model(images, comp_features)
             
-            # Calculate losses
-            class_loss = classification_loss_fn(logits, labels)
-            contrast_loss = contrastive_loss_fn(embeddings, labels)
+            # Mixed precision training
+            if use_mixed_precision:
+                with autocast():
+                    # Forward pass
+                    embeddings, logits = model(images, features)
+                    
+                    # Calculate classification loss
+                    class_loss = classification_loss(logits, labels)
+                    
+                    # Calculate contrastive loss
+                    contrast_loss = contrastive_loss(embeddings, labels)
+                    
+                    # Combined loss
+                    loss = class_loss + 0.5 * contrast_loss
+                
+                # Backward pass with scaling
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Forward pass
+                embeddings, logits = model(images, features)
+                
+                # Calculate classification loss
+                class_loss = classification_loss(logits, labels)
+                
+                # Calculate contrastive loss
+                contrast_loss = contrastive_loss(embeddings, labels)
+                
+                # Combined loss
+                loss = class_loss + 0.5 * contrast_loss
+                
+                # Backward pass
+                loss.backward()
+                optimizer.step()
             
-            # Combined loss (weighted sum)
-            loss = class_loss + 0.5 * contrast_loss
-            
-            # Backward pass and optimization
-            loss.backward()
-            optimizer.step()
-            
-            # Update metrics
+            # Update statistics
             train_loss += loss.item()
             _, predicted = torch.max(logits, 1)
             train_total += labels.size(0)
             train_correct += (predicted == labels).sum().item()
             
             # Update progress bar
-            if batch_idx % log_interval == 0:
-                pbar.set_postfix({
-                    'loss': train_loss / (batch_idx + 1),
-                    'acc': 100. * train_correct / train_total
-                })
-        
-        # Calculate epoch metrics
-        train_loss = train_loss / len(train_loader)
-        train_acc = 100. * train_correct / train_total
-        
-        metrics['train_loss'].append(train_loss)
-        metrics['train_acc'].append(train_acc)
+            train_accuracy = 100.0 * train_correct / train_total
+            train_bar.set_postfix({
+                'loss': f"{loss.item():.4f}",
+                'acc': f"{train_accuracy:.2f}%"
+            })
         
         # Validation phase
-        if val_loader:
-            model.eval()
-            val_loss = 0.0
-            val_correct = 0
-            val_total = 0
-            
-            # Progress bar for validation
-            pbar = tqdm(val_loader, desc=f'Epoch {epoch+1}/{num_epochs} [Val]')
-            
-            with torch.no_grad():
-                for batch_idx, batch in enumerate(pbar):
-                    # Get data
-                    images = batch['image'].to(device)
-                    comp_features = batch['composition_features'].to(device)
-                    labels = batch['artist_label'].to(device)
-                    
+        model.eval()
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+        
+        # Create progress bar
+        val_bar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} [Val]")
+        
+        with torch.no_grad():
+            for images, features, labels in val_bar:
+                # Move data to device
+                images = images.to(device)
+                if features is not None:
+                    features = features.to(device)
+                labels = labels.to(device)
+                
+                # Mixed precision inference (though less critical for validation)
+                if use_mixed_precision:
+                    with autocast():
+                        # Forward pass
+                        embeddings, logits = model(images, features)
+                        
+                        # Calculate classification loss
+                        class_loss = classification_loss(logits, labels)
+                        
+                        # Calculate contrastive loss
+                        contrast_loss = contrastive_loss(embeddings, labels)
+                        
+                        # Combined loss
+                        loss = class_loss + 0.5 * contrast_loss
+                else:
                     # Forward pass
-                    embeddings, logits = model(images, comp_features)
+                    embeddings, logits = model(images, features)
                     
-                    # Calculate losses
-                    class_loss = classification_loss_fn(logits, labels)
-                    contrast_loss = contrastive_loss_fn(embeddings, labels)
+                    # Calculate classification loss
+                    class_loss = classification_loss(logits, labels)
+                    
+                    # Calculate contrastive loss
+                    contrast_loss = contrastive_loss(embeddings, labels)
                     
                     # Combined loss
                     loss = class_loss + 0.5 * contrast_loss
-                    
-                    # Update metrics
-                    val_loss += loss.item()
-                    _, predicted = torch.max(logits, 1)
-                    val_total += labels.size(0)
-                    val_correct += (predicted == labels).sum().item()
-                    
-                    # Update progress bar
-                    if batch_idx % log_interval == 0:
-                        pbar.set_postfix({
-                            'loss': val_loss / (batch_idx + 1),
-                            'acc': 100. * val_correct / val_total
-                        })
+                
+                # Update statistics
+                val_loss += loss.item()
+                _, predicted = torch.max(logits, 1)
+                val_total += labels.size(0)
+                val_correct += (predicted == labels).sum().item()
+                
+                # Update progress bar
+                val_accuracy = 100.0 * val_correct / val_total
+                val_bar.set_postfix({
+                    'loss': f"{loss.item():.4f}",
+                    'acc': f"{val_accuracy:.2f}%"
+                })
+        
+        # Calculate metrics
+        epoch_train_loss = train_loss / len(train_loader)
+        epoch_train_accuracy = 100.0 * train_correct / train_total
+        epoch_val_loss = val_loss / len(val_loader)
+        epoch_val_accuracy = 100.0 * val_correct / val_total
+        
+        # Update learning rate scheduler
+        scheduler.step(epoch_val_accuracy)
+        
+        # Update metrics
+        metrics['train_loss'].append(epoch_train_loss)
+        metrics['train_accuracy'].append(epoch_train_accuracy)
+        metrics['val_loss'].append(epoch_val_loss)
+        metrics['val_accuracy'].append(epoch_val_accuracy)
+        metrics['learning_rates'].append(optimizer.param_groups[0]['lr'])
+        
+        # Save best model
+        if epoch_val_accuracy > metrics['best_val_accuracy']:
+            metrics['best_val_accuracy'] = epoch_val_accuracy
+            metrics['best_epoch'] = epoch
             
-            # Calculate epoch metrics
-            val_loss = val_loss / len(val_loader)
-            val_acc = 100. * val_correct / val_total
-            
-            metrics['val_loss'].append(val_loss)
-            metrics['val_acc'].append(val_acc)
-            
-            # Update learning rate scheduler
-            scheduler.step(val_loss)
-            
-            # Print epoch summary
-            print(f'Epoch {epoch+1}/{num_epochs} - '
-                 f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%, '
-                 f'Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%')
-        else:
-            # Print epoch summary (train only)
-            print(f'Epoch {epoch+1}/{num_epochs} - '
-                 f'Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%')
+            if checkpoint_dir:
+                os.makedirs(checkpoint_dir, exist_ok=True)
+                checkpoint_path = os.path.join(checkpoint_dir, 'model_best.pth')
+                torch.save(model.state_dict(), checkpoint_path)
+                print(f"Saved best model to {checkpoint_path}")
+        
+        # Calculate epoch time
+        epoch_time = time.time() - epoch_start_time
+        
+        # Print epoch summary
+        print(f"Epoch {epoch+1}/{num_epochs} completed in {epoch_time:.2f}s")
+        print(f"  Train Loss: {epoch_train_loss:.4f}, Train Acc: {epoch_train_accuracy:.2f}%")
+        print(f"  Val Loss: {epoch_val_loss:.4f}, Val Acc: {epoch_val_accuracy:.2f}%")
+        print(f"  LR: {optimizer.param_groups[0]['lr']:.6f}")
         
         # Save checkpoint
-        if (epoch + 1) % 5 == 0:
+        if checkpoint_dir:
+            os.makedirs(checkpoint_dir, exist_ok=True)
             checkpoint_path = os.path.join(checkpoint_dir, f'model_epoch_{epoch+1}.pth')
             torch.save({
-                'epoch': epoch + 1,
+                'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'train_loss': train_loss,
-                'val_loss': val_loss if val_loader else None,
+                'scheduler_state_dict': scheduler.state_dict(),
+                'metrics': metrics
             }, checkpoint_path)
-            print(f'Checkpoint saved to {checkpoint_path}')
+            
+            # Also save final model
+            if epoch == num_epochs - 1:
+                final_path = os.path.join(checkpoint_dir, 'model_final.pth')
+                torch.save(model.state_dict(), final_path)
     
-    # Save final model
-    final_path = os.path.join(checkpoint_dir, 'model_final.pth')
-    torch.save({
-        'epoch': num_epochs,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'train_loss': metrics['train_loss'][-1],
-        'val_loss': metrics['val_loss'][-1] if val_loader else None,
-    }, final_path)
-    print(f'Final model saved to {final_path}')
-    
+    # Return training metrics
     return metrics
 
 
@@ -385,9 +431,9 @@ def visualize_training(metrics: Dict[str, List[float]],
     ax1.grid(True)
     
     # Plot accuracy
-    ax2.plot(epochs, metrics['train_acc'], 'b-', label='Training Accuracy')
-    if 'val_acc' in metrics and metrics['val_acc']:
-        ax2.plot(epochs, metrics['val_acc'], 'r-', label='Validation Accuracy')
+    ax2.plot(epochs, metrics['train_accuracy'], 'b-', label='Training Accuracy')
+    if 'val_accuracy' in metrics and metrics['val_accuracy']:
+        ax2.plot(epochs, metrics['val_accuracy'], 'r-', label='Validation Accuracy')
     ax2.set_title('Accuracy')
     ax2.set_xlabel('Epochs')
     ax2.set_ylabel('Accuracy (%)')

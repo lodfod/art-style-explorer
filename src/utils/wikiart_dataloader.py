@@ -27,16 +27,18 @@ logger = logging.getLogger(__name__)
 class WikiArtDataset:
     """Class to handle loading and processing of the WikiArt dataset"""
     
-    def __init__(self, csv_path: str, cache_dir: str = 'data/image_cache'):
+    def __init__(self, csv_path: str, cache_dir: str = 'data/image_cache', use_gpu=False):
         """
         Initialize the WikiArt dataset
         
         Args:
             csv_path: Path to the WikiArt CSV file
             cache_dir: Directory to cache downloaded images
+            use_gpu: Whether to use GPU acceleration for processing
         """
         self.csv_path = csv_path
         self.cache_dir = cache_dir
+        self.use_gpu = use_gpu
         self.data = None
         self.style_to_id = None
         self.id_to_style = None
@@ -45,35 +47,24 @@ class WikiArtDataset:
         os.makedirs(cache_dir, exist_ok=True)
         
         # Load the dataset
-        self._load_data()
+        logger.info(f"Loading WikiArt dataset from {csv_path}")
+        self.data = pd.read_csv(csv_path)
+        logger.info(f"Loaded dataset with {len(self.data)} entries")
         
-    def _load_data(self):
-        """Load the WikiArt dataset from CSV"""
-        logger.info(f"Loading WikiArt dataset from {self.csv_path}")
+        # Check required columns
+        required_columns = ['Style', 'Artwork', 'Artist', 'Link']
+        missing_columns = [col for col in required_columns if col not in self.data.columns]
         
-        # Load the CSV
-        try:
-            self.data = pd.read_csv(self.csv_path)
-            logger.info(f"Loaded dataset with {len(self.data)} entries")
-            
-            # Check required columns
-            required_columns = ['Style', 'Artwork', 'Artist', 'Link']
-            missing_columns = [col for col in required_columns if col not in self.data.columns]
-            
-            if missing_columns:
-                raise ValueError(f"Dataset is missing required columns: {missing_columns}")
-                
-            # Create style mappings
-            unique_styles = sorted(self.data['Style'].unique())
-            self.style_to_id = {style: i for i, style in enumerate(unique_styles)}
-            self.id_to_style = {i: style for i, style in enumerate(unique_styles)}
-            
-            logger.info(f"Found {len(unique_styles)} unique art styles")
-            
-        except Exception as e:
-            logger.error(f"Error loading dataset: {e}")
-            raise
-    
+        if missing_columns:
+            raise ValueError(f"Dataset is missing required columns: {missing_columns}")
+        
+        # Create style mappings
+        unique_styles = sorted(self.data['Style'].unique())
+        self.style_to_id = {style: i for i, style in enumerate(unique_styles)}
+        self.id_to_style = {i: style for i, style in enumerate(unique_styles)}
+        
+        logger.info(f"Found {len(unique_styles)} unique art styles")
+        
     def split_dataset(self, 
                      train_ratio: float = 0.7, 
                      val_ratio: float = 0.15, 
@@ -212,9 +203,44 @@ class WikiArtDataset:
                     img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
                 
                 try:
-                    # Preprocess image and extract edges
-                    preprocessed = preprocess_image(img_array, target_size=target_size)
-                    edges = extract_edges(preprocessed, method=edge_method)
+                    # Use GPU version if available and requested
+                    if self.use_gpu:
+                        try:
+                            from src.preprocessing.edge_detection import extract_edges_gpu
+                            from cv2 import imread, resize, cvtColor, COLOR_BGR2GRAY, INTER_AREA
+                            
+                            # Read and preprocess the image
+                            original = imread(url)
+                            if original is None:
+                                logger.warning(f"Could not read image at {url}")
+                                continue
+                                
+                            # Resize the image
+                            resized = resize(original, target_size, interpolation=INTER_AREA)
+                            
+                            # Convert to grayscale if it's a color image
+                            if len(resized.shape) == 3 and resized.shape[2] == 3:
+                                gray = cvtColor(resized, COLOR_BGR2GRAY)
+                            else:
+                                gray = resized
+                                
+                            # Extract edges using GPU
+                            edges = extract_edges_gpu(gray, method=edge_method)
+                            preprocessed = gray
+                        except Exception as e:
+                            logger.warning(f"GPU processing failed, falling back to CPU: {e}")
+                            preprocessed, edges = process_artwork(url, target_size=target_size, edge_method=edge_method)
+                    else:
+                        # Use CPU processing
+                        preprocessed, edges = process_artwork(url, target_size=target_size, edge_method=edge_method)
+                    
+                    # Extract contours and features if requested
+                    features = None
+                    if extract_features:
+                        contours = detect_contours(edges)
+                        
+                        from src.preprocessing.line_features import extract_line_features
+                        features = extract_line_features(edges, contours)
                     
                     # Create result entry
                     result_entry = {
@@ -224,25 +250,21 @@ class WikiArtDataset:
                         'edges': edges
                     }
                     
-                    # Extract line features if requested
-                    if extract_features:
-                        line_features = extract_line_features(edges)
-                        
-                        # Ensure all required features have valid numeric values
-                        required_features = [
-                            'line_count', 
-                            'mean_length', 
-                            'std_length',
-                            'intersection_count'
-                        ]
-                        
-                        # Convert any missing features to numeric defaults
-                        for feature in required_features:
-                            # If feature is missing or has non-numeric value, set to 0
-                            if feature not in line_features or not isinstance(line_features[feature], (int, float)):
-                                line_features[feature] = 0
-                                
-                        result_entry['features'] = line_features
+                    # Ensure all required features have valid numeric values
+                    required_features = [
+                        'line_count', 
+                        'mean_length', 
+                        'std_length',
+                        'intersection_count'
+                    ]
+                    
+                    # Convert any missing features to numeric defaults
+                    for feature in required_features:
+                        # If feature is missing or has non-numeric value, set to 0
+                        if feature not in features or not isinstance(features[feature], (int, float)):
+                            features[feature] = 0
+                    
+                    result_entry['features'] = features
                     
                     results[artwork_id] = result_entry
                     

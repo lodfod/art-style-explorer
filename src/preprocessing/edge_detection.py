@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from typing import Tuple, Union, Optional
+import cv2.cuda as cv2cuda
 
 
 def read_image(image_path: str) -> np.ndarray:
@@ -40,6 +41,29 @@ def preprocess_image(image: np.ndarray, target_size: Tuple[int, int] = (512, 512
         gray = resized
         
     return gray
+
+
+def extract_edges_gpu(image: np.ndarray, method: str = 'canny'):
+    # Move image to GPU
+    gpu_img = cv2cuda.GpuMat()
+    gpu_img.upload(image)
+    
+    if method.lower() == 'canny':
+        # GPU Canny edge detection
+        gpu_blur = cv2cuda.createGaussianFilter(cv2.CV_8UC1, cv2.CV_8UC1, (5, 5), 0)
+        gpu_blurred = cv2cuda.GpuMat()
+        gpu_blur.apply(gpu_img, gpu_blurred)
+        
+        gpu_canny = cv2cuda.createCannyEdgeDetector(50, 150)
+        gpu_edges = cv2cuda.GpuMat()
+        gpu_canny.detect(gpu_blurred, gpu_edges)
+        
+        # Download result back to CPU
+        edges = gpu_edges.download()
+        return edges
+    
+    # Similar implementations for Sobel and Laplacian
+    # ...
 
 
 def extract_edges(image: np.ndarray, 

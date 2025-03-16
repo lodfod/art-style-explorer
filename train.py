@@ -11,6 +11,7 @@ import pandas as pd
 import time
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+from torch.cuda.amp import autocast, GradScaler
 
 from src.model.network import ArtStyleNetwork
 from src.model.training import train_model, visualize_training, ArtworkDataset
@@ -49,6 +50,12 @@ def parse_args():
                        help='Weight decay for regularization')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                        help='Device to use for training (cuda or cpu)')
+    
+    # GPU optimization arguments
+    parser.add_argument('--mixed-precision', action='store_true',
+                       help='Use mixed precision training (faster on newer GPUs)')
+    parser.add_argument('--num-workers', type=int, default=4,
+                       help='Number of worker processes for data loading')
     
     # Image processing arguments
     parser.add_argument('--img-size', type=int, default=224,
@@ -126,6 +133,20 @@ def main():
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
+    # Set device
+    device = torch.device(args.device)
+    if args.device.startswith('cuda'):
+        print(f"Using GPU: {torch.cuda.get_device_name(device)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+    
+    # Setup mixed precision if requested
+    use_mixed_precision = args.mixed_precision and args.device.startswith('cuda')
+    if use_mixed_precision:
+        print("Using mixed precision training")
+        scaler = GradScaler()
+    else:
+        scaler = None
+    
     # Load metadata
     print("Loading metadata...")
     metadata = load_metadata(args.metadata)
@@ -188,21 +209,25 @@ def main():
         extract_features_fn=extract_func
     )
     
-    # Create data loaders
+    # Create data loaders with optimized settings
     train_loader = DataLoader(
         train_dataset, 
         batch_size=args.batch_size, 
         shuffle=True, 
-        num_workers=4, 
-        pin_memory=True
+        num_workers=args.num_workers, 
+        pin_memory=True,
+        persistent_workers=True if args.num_workers > 0 else False,
+        prefetch_factor=2 if args.num_workers > 0 else None
     )
     
     val_loader = DataLoader(
         val_dataset, 
         batch_size=args.batch_size, 
         shuffle=False, 
-        num_workers=4, 
-        pin_memory=True
+        num_workers=args.num_workers, 
+        pin_memory=True,
+        persistent_workers=True if args.num_workers > 0 else False,
+        prefetch_factor=2 if args.num_workers > 0 else None
     )
     
     # Initialize model
@@ -215,6 +240,12 @@ def main():
         num_classes=num_artists,
         comp_input_dim=args.comp_input_dim
     )
+    
+    # Move model to device and optimize for speed
+    model = model.to(device)
+    if device.type == 'cuda':
+        # Optimize model for GPU
+        model = torch.compile(model) if hasattr(torch, 'compile') else model
     
     # Print model summary
     print(f"\nModel summary:")
@@ -239,8 +270,10 @@ def main():
         num_epochs=args.epochs,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
-        device=args.device,
-        checkpoint_dir=args.output_dir
+        device=device,
+        checkpoint_dir=args.output_dir,
+        use_mixed_precision=use_mixed_precision,
+        scaler=scaler
     )
     
     # Visualize training results
