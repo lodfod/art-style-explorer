@@ -153,11 +153,20 @@ def main():
     
     # Get subsamples if requested
     if args.sample_size is not None:
+        # Calculate how many samples we want per style to get approximately args.sample_size total
+        num_styles = len(dataset.data['Style'].unique())
+        samples_per_style = max(3, args.sample_size // num_styles)
+        
         # Sample while preserving class distribution
-        dataset.data = dataset.data.groupby('Style', group_keys=False).apply(
-            lambda x: x.sample(min(len(x), max(1, int(args.sample_size * len(x) / len(dataset.data)))))
-        )
-        logger.info(f"Sampled dataset to {len(dataset.data)} entries")
+        sampled_data = []
+        for style, group in dataset.data.groupby('Style'):
+            n_samples = min(len(group), samples_per_style)
+            sampled_group = group.sample(n_samples, random_state=args.seed)
+            sampled_data.append(sampled_group)
+        
+        # Combine all sampled data
+        dataset.data = pd.concat(sampled_data).reset_index(drop=True)
+        logger.info(f"Sampled dataset to {len(dataset.data)} entries ({samples_per_style} per style)")
 
     # Split the dataset
     train_df, val_df, test_df = dataset.split_dataset(
