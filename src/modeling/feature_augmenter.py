@@ -14,27 +14,71 @@ from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
 from collections import Counter
 
-# List of target art styles
-TARGET_STYLES = [
-    "High-Renaissance",
-    "Early-Renaissance",
-    "Baroque",
-    "Impressionism",
-    "Post-Impressionism",
-    "Expressionism",
-    "Neoclassicism",
-    "Classicism",
-    "Cubism",
-    "Surrealism",
-    "Abstract-Art",
-    "Pop-Art",
-    "Art-Nouveau-(Modern)"
-]
+# Define style classifications and their constituent styles
+STYLE_CLASSIFICATIONS = {
+    "Classical_And_Renaissance": [
+        "Early-Renaissance", 
+        "High-Renaissance", 
+        "Mannerism", 
+        "Neoclassicism", 
+        "Classicism"
+    ],
+    "Medieval_And_Ornamental": [
+        "Romanesque", 
+        "Baroque"
+    ],
+    "Impressionist_Movements": [
+        "Impressionism", 
+        "Post-Impressionism"
+    ],
+    "Expressionist_And_Surrealist": [
+        "Expressionism", 
+        "Surrealism"
+    ],
+    "Abstract_And_Fragmented": [
+        "Cubism", 
+        "Abstract-Art"
+    ],
+    "Graphic_Styles": [
+        "Ukiyo-e", 
+        "Pop-Art", 
+        "Art-Nouveau-(Modern)"
+    ]
+}
+
+# Flatten the list of styles for filtering
+TARGET_STYLES = []
+for styles in STYLE_CLASSIFICATIONS.values():
+    TARGET_STYLES.extend(styles)
+
+# Create a mapping from individual style to its classification
+STYLE_TO_CLASSIFICATION = {}
+for classification, styles in STYLE_CLASSIFICATIONS.items():
+    for style in styles:
+        STYLE_TO_CLASSIFICATION[style] = classification
 
 def extract_style_from_path(path):
     """Extract style name from image path."""
     # Assuming the directory structure is .../style_name/image_name.jpg
-    return Path(path).parts[-2]
+    # or .../classification/style_name/image_name.jpg
+    parts = Path(path).parts
+    for style in TARGET_STYLES:
+        if style in parts:
+            return style
+    return parts[-2]  # Fallback to second-to-last part
+
+def extract_classification_from_path(path):
+    """Extract classification from image path or derive it from style."""
+    parts = Path(path).parts
+    
+    # First check if any classification name is in the path
+    for classification in STYLE_CLASSIFICATIONS.keys():
+        if classification in parts:
+            return classification
+    
+    # If not, extract the style and map to classification
+    style = extract_style_from_path(path)
+    return STYLE_TO_CLASSIFICATION.get(style, "Unknown")
 
 def load_features(features_path):
     """Load extracted features from a pickle file."""
@@ -226,12 +270,72 @@ def augment_feature_vector(feature_dict, augmentation_strategy='all', intensity=
     
     return augmented_dict
 
-def generate_synthetic_samples(features, styles, num_samples_per_style=None, augmentation_strategy='all', intensity=0.1):
-    """Generate synthetic samples for each style to balance the dataset."""
-    # Count samples per style
+def generate_synthetic_samples(features, styles, classifications=None, num_samples_per_style=None, 
+                              num_samples_per_classification=None, augmentation_strategy='all', intensity=0.1):
+    """Generate synthetic samples for each style or classification to balance the dataset."""
+    # Count samples per style and classification
     style_counts = Counter(styles)
     
-    # Determine target number of samples per style
+    if classifications:
+        classification_counts = Counter(classifications)
+        
+        # Determine if we're balancing by style or classification
+        if num_samples_per_classification is not None:
+            # Group features by classification
+            classification_to_features = {}
+            for i, classification in enumerate(classifications):
+                if classification not in classification_to_features:
+                    classification_to_features[classification] = []
+                classification_to_features[classification].append(i)
+            
+            # Generate synthetic samples by classification
+            synthetic_features = []
+            synthetic_styles = []
+            synthetic_classifications = []
+            
+            for classification, indices in tqdm(classification_to_features.items(), 
+                                              desc="Generating synthetic samples by classification"):
+                current_count = len(indices)
+                if current_count >= num_samples_per_classification:
+                    continue
+                
+                # Number of synthetic samples needed
+                num_synthetic = num_samples_per_classification - current_count
+                
+                # Get styles in this classification
+                class_styles = set([styles[i] for i in indices])
+                
+                # Generate synthetic samples, trying to balance styles within classification
+                style_targets = {}
+                total_per_style = num_synthetic // len(class_styles)
+                remainder = num_synthetic % len(class_styles)
+                
+                for style in class_styles:
+                    style_targets[style] = total_per_style + (1 if remainder > 0 else 0)
+                    remainder -= 1 if remainder > 0 else 0
+                
+                # Generate samples for each style in the classification
+                for style in class_styles:
+                    # Get indices for this style
+                    style_indices = [i for i in indices if styles[i] == style]
+                    
+                    # Generate synthetic samples for this style
+                    for _ in range(style_targets[style]):
+                        # Randomly select a sample to augment
+                        idx = np.random.choice(style_indices)
+                        feature_dict = features[idx]
+                        
+                        # Augment the feature vector
+                        augmented_dict = augment_feature_vector(feature_dict, augmentation_strategy, intensity)
+                        
+                        # Add to synthetic samples
+                        synthetic_features.append(augmented_dict)
+                        synthetic_styles.append(style)
+                        synthetic_classifications.append(classification)
+            
+            return synthetic_features, synthetic_styles, synthetic_classifications
+    
+    # If we're not balancing by classification or classifications not provided, balance by style
     if num_samples_per_style is None:
         num_samples_per_style = max(style_counts.values())
     
@@ -242,11 +346,12 @@ def generate_synthetic_samples(features, styles, num_samples_per_style=None, aug
             style_to_features[style] = []
         style_to_features[style].append(i)
     
-    # Generate synthetic samples
+    # Generate synthetic samples by style
     synthetic_features = []
     synthetic_styles = []
+    synthetic_classifications = []
     
-    for style, indices in tqdm(style_to_features.items(), desc="Generating synthetic samples"):
+    for style, indices in tqdm(style_to_features.items(), desc="Generating synthetic samples by style"):
         current_count = len(indices)
         if current_count >= num_samples_per_style:
             continue
@@ -266,38 +371,67 @@ def generate_synthetic_samples(features, styles, num_samples_per_style=None, aug
             # Add to synthetic samples
             synthetic_features.append(augmented_dict)
             synthetic_styles.append(style)
+            if classifications:
+                synthetic_classifications.append(classifications[idx])
     
-    return synthetic_features, synthetic_styles
+    if classifications:
+        return synthetic_features, synthetic_styles, synthetic_classifications
+    else:
+        return synthetic_features, synthetic_styles, None
 
 def augment_dataset(features_path, output_path, augmentation_strategy='all', intensity=0.1, 
-                    balance_classes=True, num_samples_per_style=None, feature_type='combined'):
+                    balance_classes=True, num_samples_per_style=None, num_samples_per_classification=None,
+                    use_classifications=False, feature_type='combined'):
     """Augment the dataset and save the augmented features."""
     # Load features
     features = load_features(features_path)
     
-    # Extract styles from paths
+    # Extract styles and classifications from paths
     paths = list(features.keys())
     styles = [extract_style_from_path(path) for path in paths]
+    
+    # Extract classifications if needed
+    classifications = None
+    if use_classifications:
+        classifications = [extract_classification_from_path(path) for path in paths]
     
     # Filter to include only target styles
     valid_indices = [i for i, style in enumerate(styles) if style in TARGET_STYLES]
     valid_paths = [paths[i] for i in valid_indices]
     valid_styles = [styles[i] for i in valid_indices]
+    valid_classifications = None
+    if classifications:
+        valid_classifications = [classifications[i] for i in valid_indices]
     
     # Create feature dictionaries list
     feature_dicts = [features[path] for path in valid_paths]
     
     # Generate synthetic samples if balancing classes
     if balance_classes:
-        print("Balancing classes with synthetic samples...")
-        synthetic_features, synthetic_styles = generate_synthetic_samples(
-            feature_dicts, valid_styles, num_samples_per_style, augmentation_strategy, intensity
-        )
+        if use_classifications and num_samples_per_classification is not None:
+            print(f"Balancing classes with synthetic samples (target: {num_samples_per_classification} per classification)...")
+            synthetic_features, synthetic_styles, synthetic_classifications = generate_synthetic_samples(
+                feature_dicts, valid_styles, valid_classifications, 
+                num_samples_per_classification=num_samples_per_classification,
+                augmentation_strategy=augmentation_strategy, intensity=intensity
+            )
+        else:
+            print(f"Balancing classes with synthetic samples (target: {num_samples_per_style} per style)...")
+            synthetic_features, synthetic_styles, synthetic_classifications = generate_synthetic_samples(
+                feature_dicts, valid_styles, valid_classifications,
+                num_samples_per_style=num_samples_per_style,
+                augmentation_strategy=augmentation_strategy, intensity=intensity
+            )
         
         # Add synthetic samples to the dataset
         augmented_feature_dicts = feature_dicts + synthetic_features
         augmented_styles = valid_styles + synthetic_styles
         augmented_paths = valid_paths + [f"synthetic_{i}" for i in range(len(synthetic_features))]
+        
+        if valid_classifications and synthetic_classifications:
+            augmented_classifications = valid_classifications + synthetic_classifications
+        else:
+            augmented_classifications = None
     else:
         # Just augment existing samples
         print("Augmenting existing samples...")
@@ -308,6 +442,7 @@ def augment_dataset(features_path, output_path, augmentation_strategy='all', int
         
         augmented_styles = valid_styles
         augmented_paths = valid_paths
+        augmented_classifications = valid_classifications
     
     # Create augmented features dictionary
     augmented_features = {}
@@ -326,12 +461,32 @@ def augment_dataset(features_path, output_path, augmentation_strategy='all', int
     print("\nDataset Statistics:")
     print(f"Original dataset: {len(valid_paths)} samples")
     print(f"Augmented dataset: {len(augmented_paths)} samples")
-    print("\nSamples per style:")
     
-    for style in sorted(TARGET_STYLES):
-        original = original_counts.get(style, 0)
-        augmented = augmented_counts.get(style, 0)
-        print(f"  {style}: {original} → {augmented}")
+    if use_classifications and augmented_classifications:
+        original_class_counts = Counter(valid_classifications)
+        augmented_class_counts = Counter(augmented_classifications)
+        
+        print("\nSamples per classification:")
+        for classification in sorted(STYLE_CLASSIFICATIONS.keys()):
+            original = original_class_counts.get(classification, 0)
+            augmented = augmented_class_counts.get(classification, 0)
+            print(f"  {classification}: {original} → {augmented}")
+            
+            # Print breakdown by style within classification
+            styles_in_class = STYLE_CLASSIFICATIONS[classification]
+            for style in styles_in_class:
+                orig_style_count = sum(1 for i, s in enumerate(valid_styles) 
+                                     if s == style and valid_classifications[i] == classification)
+                aug_style_count = sum(1 for i, s in enumerate(augmented_styles) 
+                                    if s == style and augmented_classifications[i] == classification)
+                if orig_style_count > 0 or aug_style_count > 0:
+                    print(f"    - {style}: {orig_style_count} → {aug_style_count}")
+    else:
+        print("\nSamples per style:")
+        for style in sorted(TARGET_STYLES):
+            original = original_counts.get(style, 0)
+            augmented = augmented_counts.get(style, 0)
+            print(f"  {style}: {original} → {augmented}")
     
     return augmented_features
 
@@ -352,11 +507,20 @@ def parse_args():
                         help='Balance classes by generating synthetic samples')
     parser.add_argument('--num-samples-per-style', type=int, default=None,
                         help='Target number of samples per style (default: max of original counts)')
+    parser.add_argument('--use-classifications', action='store_true',
+                        help='Use the 6 main classifications instead of individual styles')
+    parser.add_argument('--num-samples-per-classification', type=int, default=None,
+                        help='Target number of samples per classification (only used with --use-classifications)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducibility')
     return parser.parse_args()
 
 def main():
     """Main function to augment the dataset."""
     args = parse_args()
+    
+    # Set random seed for reproducibility
+    np.random.seed(args.seed)
     
     print(f"Loading features from {args.features_path}...")
     
@@ -367,7 +531,9 @@ def main():
         args.augmentation_strategy,
         args.intensity,
         args.balance_classes,
-        args.num_samples_per_style
+        args.num_samples_per_style,
+        args.num_samples_per_classification,
+        args.use_classifications
     )
     
     print(f"Augmented features saved to {args.output_path}")
