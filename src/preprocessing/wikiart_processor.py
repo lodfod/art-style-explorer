@@ -154,12 +154,19 @@ def main():
                 if len(img_array.shape) == 2:
                     img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
                 elif len(img_array.shape) == 3 and img_array.shape[2] == 4:
+                    # Check if image has transparency (RGBA)
+                    has_transparency = img_array[:,:,3].min() < 255
+                    
                     # Convert RGBA to RGB
                     img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
                 
                 # Create a temporary file path for reference
-                img_path = os.path.join(args.cache_dir, f"{safe_id}.jpg")
-                
+                if 'has_transparency' in locals() and has_transparency:
+                    # Use PNG for images with transparency
+                    img_path = os.path.join(args.cache_dir, f"{safe_id}.png")
+                else:
+                    # Use JPEG for regular images
+                    img_path = os.path.join(args.cache_dir, f"{safe_id}.jpg")
                 
                 # Process image (with GPU if available)
                 if use_gpu:
@@ -174,7 +181,11 @@ def main():
                     if edges is None:
                         # Save the image temporarily if needed for process_artwork
                         if not os.path.exists(img_path):
-                            img.save(img_path)
+                            # Save as PNG or JPEG based on file extension
+                            if img_path.endswith('.png'):
+                                img.save(img_path, 'PNG')
+                            else:
+                                img.save(img_path, 'JPEG')
                         preprocessed, edges = process_artwork(
                             img_path, 
                             target_size=(args.target_size, args.target_size),
@@ -184,7 +195,11 @@ def main():
                     # Use CPU processing
                     # Save the image temporarily if needed for process_artwork
                     if not os.path.exists(img_path):
-                        img.save(img_path)
+                        # Save as PNG or JPEG based on file extension
+                        if img_path.endswith('.png'):
+                            img.save(img_path, 'PNG')
+                        else:
+                            img.save(img_path, 'JPEG')
                     preprocessed, edges = process_artwork(
                         img_path, 
                         target_size=(args.target_size, args.target_size),
