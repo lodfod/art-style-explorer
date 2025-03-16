@@ -152,11 +152,12 @@ def main():
     dataset = WikiArtDataset(args.csv_path, args.cache_dir)
     
     # Get subsamples if requested
-    data = dataset.data
     if args.sample_size is not None:
-        data = data.groupby('Style', group_keys=False).apply(
+        # Sample while preserving class distribution
+        dataset.data = dataset.data.groupby('Style', group_keys=False).apply(
             lambda x: x.sample(min(len(x), max(1, int(args.sample_size * len(x) / len(dataset.data)))))
-        logger.info(f"Sampled dataset to {len(data)} entries")
+        )
+        logger.info(f"Sampled dataset to {len(dataset.data)} entries")
 
     # Split the dataset
     train_df, val_df, test_df = dataset.split_dataset(
