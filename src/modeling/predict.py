@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Script to make predictions with the trained model on new artwork images.
+Supports both individual style classification and the 6 main classifications.
 """
 
 import os
@@ -14,6 +15,44 @@ import cv2
 import matplotlib.pyplot as plt
 from src.feature_extraction.feature_extractor import ArtworkFeatureExtractor
 from src.modeling.train_model import ArtStyleClassifier
+
+# Define style classifications and their constituent styles
+STYLE_CLASSIFICATIONS = {
+    "Classical_And_Renaissance": [
+        "Early-Renaissance", 
+        "High-Renaissance", 
+        "Mannerism", 
+        "Neoclassicism", 
+        "Classicism"
+    ],
+    "Medieval_And_Ornamental": [
+        "Romanesque", 
+        "Baroque"
+    ],
+    "Impressionist_Movements": [
+        "Impressionism", 
+        "Post-Impressionism"
+    ],
+    "Expressionist_And_Surrealist": [
+        "Expressionism", 
+        "Surrealism"
+    ],
+    "Abstract_And_Fragmented": [
+        "Cubism", 
+        "Abstract-Art"
+    ],
+    "Graphic_Styles": [
+        "Ukiyo-e", 
+        "Pop-Art", 
+        "Art-Nouveau-(Modern)"
+    ]
+}
+
+# Create a mapping from individual style to its classification
+STYLE_TO_CLASSIFICATION = {}
+for classification, styles in STYLE_CLASSIFICATIONS.items():
+    for style in styles:
+        STYLE_TO_CLASSIFICATION[style] = classification
 
 def load_model(model_dir):
     """Load the trained model and associated metadata."""
@@ -61,7 +100,11 @@ def load_model(model_dir):
     model.load_state_dict(torch.load(os.path.join(model_dir, 'model.pth'), map_location=torch.device('cpu')))
     model.eval()
     
-    return model, scaler, label_mapping
+    # Determine if the model was trained on classifications or individual styles
+    # Check if any of the labels match our classification names
+    is_classification_model = any(label in STYLE_CLASSIFICATIONS.keys() for label in label_mapping.values())
+    
+    return model, scaler, label_mapping, is_classification_model
 
 def extract_features_from_image(image_path, feature_type='combined'):
     """Extract features from a single image."""
@@ -74,7 +117,7 @@ def extract_features_from_image(image_path, feature_type='combined'):
         print(f"Error processing {image_path}: {e}")
         return None
 
-def predict_style(model, scaler, label_mapping, features, device):
+def predict_style(model, scaler, label_mapping, features, device, is_classification_model=False):
     """Predict art style from features."""
     # Scale features
     features_scaled = scaler.transform(features.reshape(1, -1))
@@ -90,19 +133,25 @@ def predict_style(model, scaler, label_mapping, features, device):
     
     # Get predicted class and probability
     predicted_class = predicted.item()
-    predicted_style = label_mapping[predicted_class]
+    predicted_label = label_mapping[predicted_class]
     probability = probabilities[0][predicted_class].item()
     
     # Get top-3 predictions
-    top3_values, top3_indices = torch.topk(probabilities, 3)
+    top3_values, top3_indices = torch.topk(probabilities, min(3, len(label_mapping)))
     top3_predictions = [
         (label_mapping[idx.item()], prob.item())
         for idx, prob in zip(top3_indices[0], top3_values[0])
     ]
     
-    return predicted_style, probability, top3_predictions
+    # If this is a style model but we want to show classifications too
+    if not is_classification_model and predicted_label in STYLE_TO_CLASSIFICATION:
+        predicted_classification = STYLE_TO_CLASSIFICATION.get(predicted_label, "Unknown")
+    else:
+        predicted_classification = None
+    
+    return predicted_label, probability, top3_predictions, predicted_classification
 
-def process_image(image_path, model, scaler, label_mapping, feature_type='combined', device='cpu'):
+def process_image(image_path, model, scaler, label_mapping, feature_type='combined', device='cpu', is_classification_model=False):
     """Process a single image and predict its art style."""
     # Extract features
     features = extract_features_from_image(image_path, feature_type)
@@ -111,18 +160,23 @@ def process_image(image_path, model, scaler, label_mapping, feature_type='combin
         return None
     
     # Predict style
-    predicted_style, probability, top3_predictions = predict_style(
-        model, scaler, label_mapping, features, device
+    predicted_label, probability, top3_predictions, predicted_classification = predict_style(
+        model, scaler, label_mapping, features, device, is_classification_model
     )
     
-    return {
+    result = {
         'path': image_path,
-        'predicted_style': predicted_style,
+        'predicted_label': predicted_label,
         'probability': probability,
         'top3_predictions': top3_predictions
     }
+    
+    if predicted_classification:
+        result['predicted_classification'] = predicted_classification
+    
+    return result
 
-def process_directory(input_dir, model, scaler, label_mapping, feature_type='combined', device='cpu'):
+def process_directory(input_dir, model, scaler, label_mapping, feature_type='combined', device='cpu', is_classification_model=False):
     """Process all images in a directory and predict their art styles."""
     # Find all image files
     image_paths = []
@@ -137,39 +191,58 @@ def process_directory(input_dir, model, scaler, label_mapping, feature_type='com
     results = []
     for path in image_paths:
         print(f"Processing {path}...")
-        result = process_image(path, model, scaler, label_mapping, feature_type, device)
+        result = process_image(path, model, scaler, label_mapping, feature_type, device, is_classification_model)
         if result:
             results.append(result)
     
     return results
 
-def visualize_predictions(results, output_dir):
+def visualize_predictions(results, output_dir, is_classification_model=False):
     """Visualize prediction results."""
     os.makedirs(output_dir, exist_ok=True)
     
     # Create a summary DataFrame
     summary_data = []
     for result in results:
-        summary_data.append({
+        data = {
             'path': result['path'],
-            'predicted_style': result['predicted_style'],
+            'predicted_label': result['predicted_label'],
             'probability': result['probability']
-        })
+        }
+        
+        if 'predicted_classification' in result:
+            data['predicted_classification'] = result['predicted_classification']
+            
+        summary_data.append(data)
     
     summary_df = pd.DataFrame(summary_data)
     summary_df.to_csv(os.path.join(output_dir, 'prediction_summary.csv'), index=False)
     
-    # Plot style distribution
+    # Plot label distribution
     plt.figure(figsize=(12, 8))
-    style_counts = summary_df['predicted_style'].value_counts().sort_values(ascending=False)
-    plt.bar(style_counts.index, style_counts.values)
-    plt.xlabel('Art Style')
+    label_column = 'predicted_label'
+    label_counts = summary_df[label_column].value_counts().sort_values(ascending=False)
+    plt.bar(label_counts.index, label_counts.values)
+    plt.xlabel('Art Style' if not is_classification_model else 'Classification')
     plt.ylabel('Count')
-    plt.title('Distribution of Predicted Art Styles')
+    plt.title(f'Distribution of Predicted {label_column}')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'style_distribution.png'))
+    plt.savefig(os.path.join(output_dir, 'label_distribution.png'))
     plt.close()
+    
+    # If we have classification data, plot that too
+    if 'predicted_classification' in summary_df.columns and not is_classification_model:
+        plt.figure(figsize=(12, 8))
+        classification_counts = summary_df['predicted_classification'].value_counts().sort_values(ascending=False)
+        plt.bar(classification_counts.index, classification_counts.values)
+        plt.xlabel('Classification')
+        plt.ylabel('Count')
+        plt.title('Distribution of Predicted Classifications')
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'classification_distribution.png'))
+        plt.close()
     
     # Create a visual grid of predictions
     num_images = min(20, len(results))  # Show at most 20 images
@@ -184,7 +257,13 @@ def visualize_predictions(results, output_dir):
         
         plt.subplot(rows, cols, i + 1)
         plt.imshow(img)
-        plt.title(f"{result['predicted_style']}\n{result['probability']:.2f}")
+        
+        # Display the appropriate label based on model type
+        title = f"{result['predicted_label']}\n{result['probability']:.2f}"
+        if 'predicted_classification' in result:
+            title = f"{result['predicted_classification']}: {result['predicted_label']}\n{result['probability']:.2f}"
+            
+        plt.title(title, fontsize=9)
         plt.axis('off')
     
     plt.tight_layout()
@@ -204,15 +283,21 @@ def visualize_predictions(results, output_dir):
         # Display image
         plt.subplot(1, 2, 1)
         plt.imshow(img)
-        plt.title(f"Predicted: {result['predicted_style']}")
+        
+        # Display the appropriate title based on model type
+        title = f"Predicted: {result['predicted_label']}"
+        if 'predicted_classification' in result:
+            title = f"Predicted: {result['predicted_classification']}\n{result['predicted_label']}"
+            
+        plt.title(title)
         plt.axis('off')
         
         # Display top-3 probabilities
         plt.subplot(1, 2, 2)
-        styles = [p[0] for p in result['top3_predictions']]
+        labels = [p[0] for p in result['top3_predictions']]
         probs = [p[1] for p in result['top3_predictions']]
         
-        plt.barh(styles, probs)
+        plt.barh(labels, probs)
         plt.xlim(0, 1)
         plt.xlabel('Probability')
         plt.title('Top-3 Predictions')
@@ -246,22 +331,28 @@ def main():
     
     # Load model
     print(f"Loading model from {args.model_dir}...")
-    model, scaler, label_mapping = load_model(args.model_dir)
+    model, scaler, label_mapping, is_classification_model = load_model(args.model_dir)
     model.to(device)
+    
+    # Print model type
+    if is_classification_model:
+        print("Detected a classification model (6 main categories)")
+    else:
+        print("Detected a style model (individual styles)")
     
     # Process input
     if os.path.isdir(args.input):
         print(f"Processing directory: {args.input}")
-        results = process_directory(args.input, model, scaler, label_mapping, args.feature_type, device)
+        results = process_directory(args.input, model, scaler, label_mapping, args.feature_type, device, is_classification_model)
     else:
         print(f"Processing image: {args.input}")
-        result = process_image(args.input, model, scaler, label_mapping, args.feature_type, device)
+        result = process_image(args.input, model, scaler, label_mapping, args.feature_type, device, is_classification_model)
         results = [result] if result else []
     
     # Visualize predictions
     if results:
         print(f"Visualizing predictions to {args.output_dir}...")
-        visualize_predictions(results, args.output_dir)
+        visualize_predictions(results, args.output_dir, is_classification_model)
         print(f"Prediction complete. Results saved to {args.output_dir}")
     else:
         print("No valid predictions were made.")

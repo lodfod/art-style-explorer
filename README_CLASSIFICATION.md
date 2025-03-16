@@ -119,9 +119,20 @@ python src/modeling/train_model.py \
 ```bash
 python src/modeling/predict.py \
   --model-dir results/model_classified/model_TIMESTAMP \
-  --input-path path/to/new/artwork/images \
+  --input path/to/new/artwork/images \
   --output-dir results/predictions
 ```
+
+The prediction script automatically detects whether your model was trained on individual styles or the 6 main classifications. It will display predictions accordingly:
+
+- If trained on the 6 main classifications, it will show the predicted classification
+- If trained on individual styles, it will show both the predicted style and its corresponding classification
+
+The script generates several visualizations:
+- A distribution of predicted labels
+- A grid of sample images with their predictions
+- Individual prediction visualizations with top-3 probabilities
+- If using a style model, an additional classification distribution chart
 
 ## Complete Example Command
 
@@ -209,6 +220,14 @@ python src/modeling/train_model.py \
 - `--test-size`: Proportion of the dataset to include in the test split
 - `--random-state`: Random seed for reproducibility
 - `--use-classifications`: Use the 6 main classifications instead of individual styles
+
+### predict.py
+
+- `--model-dir`: Directory containing the trained model
+- `--input`: Path to an image or directory of images
+- `--output-dir`: Directory to save prediction results
+- `--feature-type`: Type of feature to use (e.g., combined, color_hist_rgb, hog)
+- `--no-cuda`: Disable CUDA even if available
 
 ## Tips for Better Results
 

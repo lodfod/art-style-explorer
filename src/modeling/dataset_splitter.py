@@ -2,6 +2,7 @@
 """
 Script to split the feature-extracted dataset into train and test sets.
 Supports both individual style classification and hierarchical classification.
+Handles the 6 parent classifications that store the art styles.
 """
 
 import os
@@ -12,6 +13,7 @@ import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from collections import Counter
 
 # Define style classifications and their constituent styles
 STYLE_CLASSIFICATIONS = {
@@ -58,13 +60,30 @@ for classification, styles in STYLE_CLASSIFICATIONS.items():
 
 def extract_style_from_path(path):
     """Extract style name from image path."""
-    # Assuming the directory structure is .../style_name/image_name.jpg
-    # or .../classification/style_name/image_name.jpg
+    # Handle hierarchical directory structure: .../classification/style/image.jpg
+    # or flat structure: .../style/image.jpg
     parts = Path(path).parts
+    
+    # First check if any style name is in the path
     for style in TARGET_STYLES:
         if style in parts:
             return style
-    return parts[-2]  # Fallback to second-to-last part
+    
+    # Check if path follows hierarchical structure
+    for classification in STYLE_CLASSIFICATIONS.keys():
+        if classification in parts:
+            # Get the part after the classification
+            idx = parts.index(classification)
+            if idx + 1 < len(parts):
+                potential_style = parts[idx + 1]
+                if potential_style in TARGET_STYLES:
+                    return potential_style
+    
+    # Fallback to second-to-last part (assuming path/to/style/image.jpg)
+    if len(parts) >= 2:
+        return parts[-2]
+    
+    return "Unknown"
 
 def extract_classification_from_path(path):
     """Extract classification from image path or derive it from style."""
@@ -85,8 +104,24 @@ def load_features(features_path):
         features = pickle.load(f)
     return features
 
-def prepare_dataset(features, feature_type='combined', use_classifications=False):
-    """Prepare dataset for model training."""
+def prepare_dataset(features, feature_type='combined', use_classifications=False, include_both=False):
+    """
+    Prepare dataset for model training.
+    
+    Args:
+        features: Dictionary of features
+        feature_type: Type of feature to use
+        use_classifications: Whether to use classifications as labels
+        include_both: Whether to include both style and classification info
+    
+    Returns:
+        X_filtered: Feature vectors
+        y: Encoded labels
+        paths_filtered: Image paths
+        label_mapping: Mapping from encoded labels to names
+        styles: List of styles (if include_both=True)
+        classifications: List of classifications (if include_both=True)
+    """
     X = []
     paths = []
     
@@ -97,20 +132,27 @@ def prepare_dataset(features, feature_type='combined', use_classifications=False
     
     X = np.array(X)
     
+    # Extract styles and classifications
+    styles = [extract_style_from_path(path) for path in paths]
+    classifications = [extract_classification_from_path(path) for path in paths]
+    
+    # Filter based on what we're using as labels
     if use_classifications:
         # Use the 6 main classifications as labels
-        labels = [extract_classification_from_path(path) for path in paths]
+        labels = classifications
         # Filter to include only paths with valid classifications
         valid_indices = [i for i, label in enumerate(labels) if label != "Unknown"]
     else:
         # Use individual styles as labels
-        labels = [extract_style_from_path(path) for path in paths]
+        labels = styles
         # Filter to include only target styles
         valid_indices = [i for i, label in enumerate(labels) if label in TARGET_STYLES]
     
     X_filtered = X[valid_indices]
     labels_filtered = [labels[i] for i in valid_indices]
     paths_filtered = [paths[i] for i in valid_indices]
+    styles_filtered = [styles[i] for i in valid_indices]
+    classifications_filtered = [classifications[i] for i in valid_indices]
     
     # Encode labels
     label_encoder = LabelEncoder()
@@ -119,22 +161,65 @@ def prepare_dataset(features, feature_type='combined', use_classifications=False
     # Create a mapping from encoded labels to style/classification names
     label_mapping = {i: label for i, label in enumerate(label_encoder.classes_)}
     
-    return X_filtered, y, paths_filtered, label_mapping
+    if include_both:
+        return X_filtered, y, paths_filtered, label_mapping, styles_filtered, classifications_filtered
+    else:
+        return X_filtered, y, paths_filtered, label_mapping
 
-def split_dataset(X, y, paths, test_size=0.2, random_state=42):
-    """Split dataset into train and test sets."""
-    X_train, X_test, y_train, y_test, paths_train, paths_test = train_test_split(
-        X, y, paths, test_size=test_size, random_state=random_state, stratify=y
-    )
+def split_dataset(X, y, paths, styles=None, classifications=None, test_size=0.2, 
+                 random_state=42, stratify_by_classification=False):
+    """
+    Split dataset into train and test sets.
     
-    return {
-        'X_train': X_train,
-        'X_test': X_test,
-        'y_train': y_train,
-        'y_test': y_test,
-        'paths_train': paths_train,
-        'paths_test': paths_test
-    }
+    Args:
+        X: Feature vectors
+        y: Encoded labels
+        paths: Image paths
+        styles: List of styles
+        classifications: List of classifications
+        test_size: Proportion of the dataset to include in the test split
+        random_state: Random state for reproducibility
+        stratify_by_classification: Whether to stratify by classification instead of label
+    
+    Returns:
+        Dictionary containing train/test splits
+    """
+    # Determine what to stratify by
+    if stratify_by_classification and classifications is not None:
+        stratify = classifications
+    else:
+        stratify = y
+    
+    if styles is not None and classifications is not None:
+        X_train, X_test, y_train, y_test, paths_train, paths_test, styles_train, styles_test, class_train, class_test = train_test_split(
+            X, y, paths, styles, classifications, test_size=test_size, random_state=random_state, stratify=stratify
+        )
+        
+        return {
+            'X_train': X_train,
+            'X_test': X_test,
+            'y_train': y_train,
+            'y_test': y_test,
+            'paths_train': paths_train,
+            'paths_test': paths_test,
+            'styles_train': styles_train,
+            'styles_test': styles_test,
+            'classifications_train': class_train,
+            'classifications_test': class_test
+        }
+    else:
+        X_train, X_test, y_train, y_test, paths_train, paths_test = train_test_split(
+            X, y, paths, test_size=test_size, random_state=random_state, stratify=stratify
+        )
+        
+        return {
+            'X_train': X_train,
+            'X_test': X_test,
+            'y_train': y_train,
+            'y_test': y_test,
+            'paths_train': paths_train,
+            'paths_test': paths_test
+        }
 
 def save_splits(splits, label_mapping, output_dir, use_classifications=False):
     """Save train/test splits and label mapping to disk."""
@@ -151,22 +236,40 @@ def save_splits(splits, label_mapping, output_dir, use_classifications=False):
     # Create summary CSV files
     label_column_name = 'classification' if use_classifications else 'style'
     
-    train_df = pd.DataFrame({
-        'path': splits['paths_train'],
-        'label': splits['y_train'],
-        label_column_name: [label_mapping[label] for label in splits['y_train']]
-    })
+    # Determine if we have style and classification info in the splits
+    has_detailed_info = 'styles_train' in splits and 'classifications_train' in splits
     
-    test_df = pd.DataFrame({
-        'path': splits['paths_test'],
-        'label': splits['y_test'],
-        label_column_name: [label_mapping[label] for label in splits['y_test']]
-    })
-    
-    # If using individual styles, add classification column
-    if not use_classifications:
-        train_df['classification'] = train_df['style'].map(STYLE_TO_CLASSIFICATION)
-        test_df['classification'] = test_df['style'].map(STYLE_TO_CLASSIFICATION)
+    if has_detailed_info:
+        train_df = pd.DataFrame({
+            'path': splits['paths_train'],
+            'label': splits['y_train'],
+            'style': splits['styles_train'],
+            'classification': splits['classifications_train']
+        })
+        
+        test_df = pd.DataFrame({
+            'path': splits['paths_test'],
+            'label': splits['y_test'],
+            'style': splits['styles_test'],
+            'classification': splits['classifications_test']
+        })
+    else:
+        train_df = pd.DataFrame({
+            'path': splits['paths_train'],
+            'label': splits['y_train'],
+            label_column_name: [label_mapping[label] for label in splits['y_train']]
+        })
+        
+        test_df = pd.DataFrame({
+            'path': splits['paths_test'],
+            'label': splits['y_test'],
+            label_column_name: [label_mapping[label] for label in splits['y_test']]
+        })
+        
+        # If using individual styles, add classification column
+        if not use_classifications:
+            train_df['classification'] = train_df['style'].map(STYLE_TO_CLASSIFICATION)
+            test_df['classification'] = test_df['style'].map(STYLE_TO_CLASSIFICATION)
     
     # Save summary CSVs
     train_df.to_csv(os.path.join(output_dir, 'train_summary.csv'), index=False)
@@ -177,6 +280,11 @@ def save_splits(splits, label_mapping, output_dir, use_classifications=False):
         'label': list(label_mapping.keys()),
         label_column_name: list(label_mapping.values())
     })
+    
+    # Add classification to mapping if using styles
+    if not use_classifications:
+        mapping_df['classification'] = mapping_df[label_column_name].map(STYLE_TO_CLASSIFICATION)
+    
     mapping_df.to_csv(os.path.join(output_dir, 'label_mapping.csv'), index=False)
     
     # Print dataset statistics
@@ -186,8 +294,16 @@ def save_splits(splits, label_mapping, output_dir, use_classifications=False):
     print(f"  Number of classes: {len(label_mapping)}")
     
     # Print class distribution
-    train_class_dist = train_df[label_column_name].value_counts().sort_index()
-    test_class_dist = test_df[label_column_name].value_counts().sort_index()
+    if has_detailed_info:
+        if use_classifications:
+            train_class_dist = Counter(splits['classifications_train'])
+            test_class_dist = Counter(splits['classifications_test'])
+        else:
+            train_class_dist = Counter(splits['styles_train'])
+            test_class_dist = Counter(splits['styles_test'])
+    else:
+        train_class_dist = train_df[label_column_name].value_counts().to_dict()
+        test_class_dist = test_df[label_column_name].value_counts().to_dict()
     
     print(f"\nClass distribution ({label_column_name}):")
     for class_name in sorted(label_mapping.values()):
@@ -195,16 +311,33 @@ def save_splits(splits, label_mapping, output_dir, use_classifications=False):
         test_count = test_class_dist.get(class_name, 0)
         print(f"  {class_name}: {train_count} train, {test_count} test")
     
-    # If using individual styles, also print distribution by classification
-    if not use_classifications:
-        train_classification_dist = train_df['classification'].value_counts().sort_index()
-        test_classification_dist = test_df['classification'].value_counts().sort_index()
+    # Print distribution by classification
+    if has_detailed_info:
+        train_classification_dist = Counter(splits['classifications_train'])
+        test_classification_dist = Counter(splits['classifications_test'])
+    else:
+        train_classification_dist = train_df['classification'].value_counts().to_dict()
+        test_classification_dist = test_df['classification'].value_counts().to_dict()
+    
+    print("\nClassification distribution:")
+    for classification in sorted(STYLE_CLASSIFICATIONS.keys()):
+        train_count = train_classification_dist.get(classification, 0)
+        test_count = test_classification_dist.get(classification, 0)
+        print(f"  {classification}: {train_count} train, {test_count} test")
         
-        print("\nClassification distribution:")
-        for classification in sorted(STYLE_CLASSIFICATIONS.keys()):
-            train_count = train_classification_dist.get(classification, 0)
-            test_count = test_classification_dist.get(classification, 0)
-            print(f"  {classification}: {train_count} train, {test_count} test")
+        # If using styles as labels, print breakdown by style within classification
+        if not use_classifications:
+            styles_in_class = STYLE_CLASSIFICATIONS[classification]
+            for style in styles_in_class:
+                if has_detailed_info:
+                    train_style_count = sum(1 for s in splits['styles_train'] if s == style)
+                    test_style_count = sum(1 for s in splits['styles_test'] if s == style)
+                else:
+                    train_style_count = sum(1 for s in train_df['style'] if s == style)
+                    test_style_count = sum(1 for s in test_df['style'] if s == style)
+                
+                if train_style_count > 0 or test_style_count > 0:
+                    print(f"    - {style}: {train_style_count} train, {test_style_count} test")
 
 def parse_args():
     """Parse command line arguments."""
@@ -221,6 +354,8 @@ def parse_args():
                         help='Random state for reproducibility')
     parser.add_argument('--use-classifications', action='store_true',
                         help='Use the 6 main classifications instead of individual styles')
+    parser.add_argument('--stratify-by-classification', action='store_true',
+                        help='Stratify the split by classification even when using styles as labels')
     return parser.parse_args()
 
 def main():
@@ -234,12 +369,41 @@ def main():
     # Prepare dataset
     label_type = "classifications" if args.use_classifications else "styles"
     print(f"Preparing dataset using {args.feature_type} features and {label_type} as labels...")
-    X, y, paths, label_mapping = prepare_dataset(features, args.feature_type, args.use_classifications)
+    
+    # Always include both style and classification info for better reporting
+    X, y, paths, label_mapping, styles, classifications = prepare_dataset(
+        features, args.feature_type, args.use_classifications, include_both=True
+    )
+    
     print(f"Prepared dataset with {len(X)} samples and {len(label_mapping)} classes")
     
+    # Print initial class distribution
+    style_counts = Counter(styles)
+    classification_counts = Counter(classifications)
+    
+    print("\nInitial dataset distribution:")
+    print("Styles:")
+    for style in sorted(style_counts.keys()):
+        print(f"  {style}: {style_counts[style]} samples")
+    
+    print("\nClassifications:")
+    for classification in sorted(classification_counts.keys()):
+        print(f"  {classification}: {classification_counts[classification]} samples")
+        # Print breakdown by style within classification
+        styles_in_class = STYLE_CLASSIFICATIONS.get(classification, [])
+        for style in styles_in_class:
+            if style in style_counts:
+                print(f"    - {style}: {style_counts[style]} samples")
+    
     # Split dataset
-    print(f"Splitting dataset with test_size={args.test_size}...")
-    splits = split_dataset(X, y, paths, args.test_size, args.random_state)
+    stratify_method = "classification" if args.stratify_by_classification else "label"
+    print(f"Splitting dataset with test_size={args.test_size}, stratifying by {stratify_method}...")
+    
+    splits = split_dataset(
+        X, y, paths, styles, classifications, 
+        args.test_size, args.random_state, 
+        args.stratify_by_classification
+    )
     
     # Save splits
     print(f"Saving splits to {args.output_dir}...")
