@@ -12,7 +12,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from src.utils.wikiart_dataloader import WikiArtDataset
-from src.preprocessing.edge_detection import extract_edges, extract_edges_gpu, preprocess_image, detect_contours
+from src.preprocessing.edge_detection import extract_edges, extract_edges_gpu, preprocess_image, detect_contours, process_artwork
 from src.features.line_features import extract_line_features
 
 # Configure logging
@@ -160,6 +160,7 @@ def main():
                 # Create a temporary file path for reference
                 img_path = os.path.join(args.cache_dir, f"{safe_id}.jpg")
                 
+                
                 # Process image (with GPU if available)
                 if use_gpu:
                     # Preprocess the image directly from the array
@@ -171,7 +172,6 @@ def main():
                     
                     # Fall back to CPU if GPU processing failed
                     if edges is None:
-                        from src.preprocessing.edge_detection import process_artwork
                         # Save the image temporarily if needed for process_artwork
                         if not os.path.exists(img_path):
                             img.save(img_path)
