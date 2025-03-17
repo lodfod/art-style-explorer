@@ -1,0 +1,14 @@
+ArtStyleClassifier(
+  (model): Sequential(
+    (0): Linear(in_features=8564, out_features=1024, bias=True)
+    (1): LeakyReLU(negative_slope=0.2)
+    (2): Dropout(p=0.6, inplace=False)
+    (3): Linear(in_features=1024, out_features=512, bias=True)
+    (4): LeakyReLU(negative_slope=0.2)
+    (5): Dropout(p=0.6, inplace=False)
+    (6): Linear(in_features=512, out_features=256, bias=True)
+    (7): LeakyReLU(negative_slope=0.2)
+    (8): Dropout(p=0.6, inplace=False)
+    (9): Linear(in_features=256, out_features=6, bias=True)
+  )
+)

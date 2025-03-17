@@ -13,38 +13,43 @@ import torch
 from pathlib import Path
 import cv2
 import matplotlib.pyplot as plt
-from src.feature_extraction.feature_extractor import ArtworkFeatureExtractor
+import sys
+import re
+
+# Add the project root directory to the Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+sys.path.insert(0, project_root)
+from src.preprocessing.feature_extractor import ArtworkFeatureExtractor
 from src.modeling.train_model import ArtStyleClassifier
 
 # Define style classifications and their constituent styles
 STYLE_CLASSIFICATIONS = {
-    "Classical_And_Renaissance": [
-        "Early-Renaissance", 
-        "High-Renaissance", 
-        "Mannerism", 
-        "Neoclassicism", 
-        "Classicism"
-    ],
-    "Medieval_And_Ornamental": [
-        "Romanesque", 
-        "Baroque"
-    ],
-    "Impressionist_Movements": [
+ "Impressionist_and_Post_Impressionist": [
         "Impressionism", 
         "Post-Impressionism"
     ],
-    "Expressionist_And_Surrealist": [
-        "Expressionism", 
-        "Surrealism"
-    ],
-    "Abstract_And_Fragmented": [
-        "Cubism", 
-        "Abstract-Art"
-    ],
-    "Graphic_Styles": [
+    "Graphic_and_Pattern_Based": [
         "Ukiyo-e", 
         "Pop-Art", 
         "Art-Nouveau-(Modern)"
+    ],
+    "Geometric_and_Abstract": [
+        "Cubism", 
+        "Abstract-Art"
+    ],
+    "Expressive_and_Emotional": [
+        "Expressionism", 
+        "Surrealism"
+    ],
+    "Figurative_Traditional": [
+        "Early-Renaissance", 
+        "High-Renaissance", 
+        "Neoclassicism", 
+        "Classicism"
+    ],
+    "Decorative_and_Ornamental": [
+        "Romanesque", 
+        "Baroque"
     ]
 }
 
@@ -56,48 +61,113 @@ for classification, styles in STYLE_CLASSIFICATIONS.items():
 
 def load_model(model_dir):
     """Load the trained model and associated metadata."""
+    # Check if model directory exists
+    if not os.path.exists(model_dir):
+        raise FileNotFoundError(f"Model directory '{model_dir}' does not exist")
+    
+    print(f"Looking for model files in: {model_dir}")
+    print(f"Available files: {os.listdir(model_dir)}")
+    
     # Load label mapping
-    with open(os.path.join(model_dir, 'label_mapping.pkl'), 'rb') as f:
-        label_mapping = pickle.load(f)
+    label_mapping_path = os.path.join(model_dir, 'label_mapping.pkl')
+    if not os.path.exists(label_mapping_path):
+        # Try CSV as fallback
+        csv_path = os.path.join(model_dir, 'label_mapping.csv')
+        if os.path.exists(csv_path):
+            print(f"Using label_mapping.csv instead of label_mapping.pkl")
+            label_df = pd.read_csv(csv_path)
+            label_mapping = {row['index']: row['label'] for _, row in label_df.iterrows()}
+        else:
+            raise FileNotFoundError(f"Label mapping file not found in {model_dir}")
+    else:
+        with open(label_mapping_path, 'rb') as f:
+            label_mapping = pickle.load(f)
     
     # Load scaler
-    with open(os.path.join(model_dir, 'scaler.pkl'), 'rb') as f:
-        scaler = pickle.load(f)
+    scaler_path = os.path.join(model_dir, 'scaler.pkl')
+    if not os.path.exists(scaler_path):
+        print(f"Warning: Scaler file not found at {scaler_path}")
+        print("Using a default StandardScaler instead. This may affect prediction accuracy.")
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+    else:
+        with open(scaler_path, 'rb') as f:
+            scaler = pickle.load(f)
     
     # Load model architecture
-    with open(os.path.join(model_dir, 'model_architecture.txt'), 'r') as f:
-        architecture = f.read()
+    architecture_path = os.path.join(model_dir, 'model_architecture.txt')
+    if not os.path.exists(architecture_path):
+        print(f"Warning: Model architecture file not found at {architecture_path}")
+        print("Using default architecture. This may not match the trained model.")
+        # Default architecture from train_model.py
+        input_size = 512  # Default feature size
+        hidden_sizes = [1024, 512, 256]  # Default hidden layer sizes from train_model.py
+        use_batch_norm = True
+        dropout_rate = 0.5
+    else:
+        with open(architecture_path, 'r') as f:
+            architecture = f.read()
+        
+        # Parse input size and hidden sizes from architecture
+        input_size = None
+        hidden_sizes = []
+        dropout_rate = 0.5  # Default
+        use_batch_norm = False
+        
+        # Check for batch normalization
+        if "BatchNorm" in architecture:
+            use_batch_norm = True
+        
+        # Extract dropout rate if present
+        dropout_match = re.search(r"Dropout\(p=([0-9.]+)", architecture)
+        if dropout_match:
+            dropout_rate = float(dropout_match.group(1))
+        
+        # Parse linear layers
+        linear_layers = re.findall(r"Linear\(in_features=(\d+), out_features=(\d+)", architecture)
+        if linear_layers:
+            # First layer gives us input size
+            input_size = int(linear_layers[0][0])
+            
+            # All but the last layer give us hidden sizes
+            hidden_sizes = [int(layer[1]) for layer in linear_layers[:-1]]
+            
+            # Last layer gives us number of classes
+            num_classes = int(linear_layers[-1][1])
+            
+            print(f"Parsed architecture: input_size={input_size}, hidden_sizes={hidden_sizes}, num_classes={num_classes}")
+        else:
+            print("Warning: Could not parse Linear layers from architecture file.")
+            input_size = 512
+            hidden_sizes = [1024, 512, 256]
     
-    # Parse input size and hidden sizes from architecture
-    # This is a simple approach and might need adjustment based on your model architecture
-    lines = architecture.split('\n')
-    input_size = None
-    hidden_sizes = []
+    # If we couldn't parse the architecture or hidden_sizes is empty, use defaults
+    if input_size is None:
+        print("Warning: Could not parse input size from architecture file. Using default value.")
+        input_size = 512
     
-    for line in lines:
-        if 'Linear' in line:
-            parts = line.split('(')
-            if len(parts) > 1:
-                size_part = parts[1].split(',')[0]
-                if 'in_features=' in size_part:
-                    in_features = int(size_part.split('=')[1])
-                    out_features = int(parts[1].split('out_features=')[1].split(',')[0])
-                    
-                    if input_size is None:
-                        input_size = in_features
-                        hidden_sizes.append(out_features)
-                    elif len(hidden_sizes) < 3:  # Assuming 3 hidden layers
-                        hidden_sizes.append(out_features)
+    if not hidden_sizes:
+        print("Warning: Could not parse hidden sizes from architecture file. Using default values from train_model.py.")
+        hidden_sizes = [1024, 512, 256]
     
-    # Remove the last element (output layer)
-    hidden_sizes = hidden_sizes[:-1]
+    print(f"Using model architecture: input_size={input_size}, hidden_sizes={hidden_sizes}, dropout_rate={dropout_rate}, use_batch_norm={use_batch_norm}")
     
     # Create model
     num_classes = len(label_mapping)
-    model = ArtStyleClassifier(input_size, hidden_sizes, num_classes)
+    model = ArtStyleClassifier(
+        input_size, 
+        hidden_sizes, 
+        num_classes,
+        dropout_rate=dropout_rate,
+        use_batch_norm=use_batch_norm
+    )
     
     # Load model weights
-    model.load_state_dict(torch.load(os.path.join(model_dir, 'model.pth'), map_location=torch.device('cpu')))
+    model_path = os.path.join(model_dir, 'model.pth')
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model weights file not found at {model_path}")
+    
+    model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
     model.eval()
     
     # Determine if the model was trained on classifications or individual styles

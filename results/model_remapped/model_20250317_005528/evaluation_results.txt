@@ -1,0 +1,45 @@
+Test accuracy: 0.4462
+
+Classification Report:
+                              precision    recall  f1-score   support
+
+     Abstract_And_Fragmented       0.43      0.23      0.30        95
+   Classical_And_Renaissance       0.48      0.44      0.46        98
+Expressionist_And_Surrealist       0.21      0.17      0.19        96
+              Graphic_Styles       0.47      0.58      0.52        97
+     Impressionist_Movements       0.52      0.81      0.63        98
+     Medieval_And_Ornamental       0.46      0.45      0.45        92
+
+                    accuracy                           0.45       576
+                   macro avg       0.43      0.44      0.42       576
+                weighted avg       0.43      0.45      0.43       576
+
+
+Model Architecture:
+ArtStyleClassifier(
+  (model): Sequential(
+    (0): Linear(in_features=8564, out_features=1024, bias=True)
+    (1): LeakyReLU(negative_slope=0.2)
+    (2): Dropout(p=0.6, inplace=False)
+    (3): Linear(in_features=1024, out_features=512, bias=True)
+    (4): LeakyReLU(negative_slope=0.2)
+    (5): Dropout(p=0.6, inplace=False)
+    (6): Linear(in_features=512, out_features=256, bias=True)
+    (7): LeakyReLU(negative_slope=0.2)
+    (8): Dropout(p=0.6, inplace=False)
+    (9): Linear(in_features=256, out_features=6, bias=True)
+  )
+)
+
+Training Parameters:
+Batch size: 32
+Hidden sizes: [1024, 512, 256]
+Learning rate: 2e-05
+Dropout rate: 0.6
+Weight decay: 1e-05
+Feature selection: none
+Batch normalization: False
+Mixup augmentation: False
+Number of epochs: 10000
+Early stopping patience: 100
+Training time: 42.08 seconds
