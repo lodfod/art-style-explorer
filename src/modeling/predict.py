@@ -53,6 +53,17 @@ STYLE_CLASSIFICATIONS = {
     ]
 }
 
+
+# for all predicted outputs, map the classifications to the following:
+
+REMAP_CLASSIFICATIONS_FOR_OUTPUTS = {
+ "Impressionist_and_Post_Impressionist": "Impressionist",
+    "Graphic_and_Pattern_Based": "Graphical",
+    "Geometric_and_Abstract": "Geometric/Abstract",
+    "Expressive_and_Emotional": "Expressionism/Surrealism",
+    "Figurative_Traditional": "Traditional/Classical",
+    "Decorative_and_Ornamental": "Romanesque/Baroque"
+}
 # Create a mapping from individual style to its classification
 STYLE_TO_CLASSIFICATION = {}
 for classification, styles in STYLE_CLASSIFICATIONS.items():
@@ -208,18 +219,43 @@ def predict_style(model, scaler, label_mapping, features, device, is_classificat
     
     # Get top-3 predictions
     top3_values, top3_indices = torch.topk(probabilities, min(3, len(label_mapping)))
-    top3_predictions = [
-        (label_mapping[idx.item()], prob.item())
-        for idx, prob in zip(top3_indices[0], top3_values[0])
-    ]
+    top3_predictions = []
+    for idx, prob in zip(top3_indices[0], top3_values[0]):
+        style_label = label_mapping[idx.item()]
+        
+        # Apply classification mapping if not a classification model
+        if not is_classification_model and style_label in STYLE_TO_CLASSIFICATION:
+            style_classification = STYLE_TO_CLASSIFICATION.get(style_label, "Unknown")
+            
+            # Apply remapping for display
+            if style_classification in REMAP_CLASSIFICATIONS_FOR_OUTPUTS:
+                display_classification = REMAP_CLASSIFICATIONS_FOR_OUTPUTS[style_classification]
+            else:
+                display_classification = style_classification
+                
+            top3_predictions.append((style_label, prob.item(), display_classification))
+        else:
+            # This is already a classification, apply remapping
+            if style_label in REMAP_CLASSIFICATIONS_FOR_OUTPUTS:
+                display_classification = REMAP_CLASSIFICATIONS_FOR_OUTPUTS[style_label]
+            else:
+                display_classification = style_label
+                
+            top3_predictions.append((style_label, prob.item(), display_classification))
     
     # If this is a style model but we want to show classifications too
     if not is_classification_model and predicted_label in STYLE_TO_CLASSIFICATION:
         predicted_classification = STYLE_TO_CLASSIFICATION.get(predicted_label, "Unknown")
     else:
-        predicted_classification = None
+        predicted_classification = predicted_label
     
-    return predicted_label, probability, top3_predictions, predicted_classification
+    # Remap classification names for output display
+    if predicted_classification in REMAP_CLASSIFICATIONS_FOR_OUTPUTS:
+        display_classification = REMAP_CLASSIFICATIONS_FOR_OUTPUTS[predicted_classification]
+    else:
+        display_classification = predicted_classification
+    
+    return predicted_label, probability, top3_predictions, predicted_classification, display_classification
 
 def process_image(image_path, model, scaler, label_mapping, feature_type='combined', device='cpu', is_classification_model=False):
     """Process a single image and predict its art style."""
@@ -230,7 +266,7 @@ def process_image(image_path, model, scaler, label_mapping, feature_type='combin
         return None
     
     # Predict style
-    predicted_label, probability, top3_predictions, predicted_classification = predict_style(
+    predicted_label, probability, top3_predictions, predicted_classification, display_classification = predict_style(
         model, scaler, label_mapping, features, device, is_classification_model
     )
     
@@ -243,6 +279,7 @@ def process_image(image_path, model, scaler, label_mapping, feature_type='combin
     
     if predicted_classification:
         result['predicted_classification'] = predicted_classification
+        result['display_classification'] = display_classification
     
     return result
 
@@ -283,36 +320,15 @@ def visualize_predictions(results, output_dir, is_classification_model=False):
         if 'predicted_classification' in result:
             data['predicted_classification'] = result['predicted_classification']
             
+        if 'display_classification' in result:
+            data['display_classification'] = result['display_classification']
+            
         summary_data.append(data)
     
     summary_df = pd.DataFrame(summary_data)
     summary_df.to_csv(os.path.join(output_dir, 'prediction_summary.csv'), index=False)
     
-    # Plot label distribution
-    plt.figure(figsize=(12, 8))
-    label_column = 'predicted_label'
-    label_counts = summary_df[label_column].value_counts().sort_values(ascending=False)
-    plt.bar(label_counts.index, label_counts.values)
-    plt.xlabel('Art Style' if not is_classification_model else 'Classification')
-    plt.ylabel('Count')
-    plt.title(f'Distribution of Predicted {label_column}')
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'label_distribution.png'))
-    plt.close()
-    
-    # If we have classification data, plot that too
-    if 'predicted_classification' in summary_df.columns and not is_classification_model:
-        plt.figure(figsize=(12, 8))
-        classification_counts = summary_df['predicted_classification'].value_counts().sort_values(ascending=False)
-        plt.bar(classification_counts.index, classification_counts.values)
-        plt.xlabel('Classification')
-        plt.ylabel('Count')
-        plt.title('Distribution of Predicted Classifications')
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'classification_distribution.png'))
-        plt.close()
+
     
     # Create a visual grid of predictions
     num_images = min(20, len(results))  # Show at most 20 images
@@ -330,7 +346,9 @@ def visualize_predictions(results, output_dir, is_classification_model=False):
         
         # Display the appropriate label based on model type
         title = f"{result['predicted_label']}\n{result['probability']:.2f}"
-        if 'predicted_classification' in result:
+        if 'display_classification' in result:
+            title = f"{result['display_classification']}: {result['predicted_label']}\n{result['probability']:.2f}"
+        elif 'predicted_classification' in result:
             title = f"{result['predicted_classification']}: {result['predicted_label']}\n{result['probability']:.2f}"
             
         plt.title(title, fontsize=9)
@@ -356,16 +374,24 @@ def visualize_predictions(results, output_dir, is_classification_model=False):
         
         # Display the appropriate title based on model type
         title = f"Predicted: {result['predicted_label']}"
-        if 'predicted_classification' in result:
-            title = f"Predicted: {result['predicted_classification']}\n{result['predicted_label']}"
+        if 'display_classification' in result:
+            title = f"Predicted: {result['display_classification']}"
+        elif 'predicted_classification' in result:
+            title = f"Predicted: {result['predicted_classification']}"
             
         plt.title(title)
         plt.axis('off')
         
         # Display top-3 probabilities
         plt.subplot(1, 2, 2)
-        labels = [p[0] for p in result['top3_predictions']]
-        probs = [p[1] for p in result['top3_predictions']]
+        
+        # Use the display classifications for top3 predictions if available
+        if len(result['top3_predictions'][0]) == 3:  # Check if it has display classifications
+            labels = [f"{p[2]}" for p in result['top3_predictions']]
+            probs = [p[1] for p in result['top3_predictions']]
+        else:
+            labels = [p[0] for p in result['top3_predictions']]
+            probs = [p[1] for p in result['top3_predictions']]
         
         plt.barh(labels, probs)
         plt.xlim(0, 1)
