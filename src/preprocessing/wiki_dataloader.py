@@ -17,33 +17,32 @@ import numpy as np
 
 # Define style classifications and their constituent styles
 STYLE_CLASSIFICATIONS = {
-    "Classical_And_Renaissance": [
-        "Early-Renaissance", 
-        "High-Renaissance", 
-        "Mannerism", 
-        "Neoclassicism", 
-        "Classicism"
-    ],
-    "Medieval_And_Ornamental": [
-        "Romanesque", 
-        "Baroque"
-    ],
-    "Impressionist_Movements": [
+       "Impressionist_and_Post_Impressionist": [
         "Impressionism", 
         "Post-Impressionism"
     ],
-    "Expressionist_And_Surrealist": [
-        "Expressionism", 
-        "Surrealism"
-    ],
-    "Abstract_And_Fragmented": [
-        "Cubism", 
-        "Abstract-Art"
-    ],
-    "Graphic_Styles": [
+    "Graphic_and_Pattern_Based": [
         "Ukiyo-e", 
         "Pop-Art", 
         "Art-Nouveau-(Modern)"
+    ],
+    "Geometric_and_Abstract": [
+        "Cubism", 
+        "Abstract-Art"
+    ],
+    "Expressive_and_Emotional": [
+        "Expressionism", 
+        "Surrealism"
+    ],
+    "Figurative_Traditional": [
+        "Early-Renaissance", 
+        "High-Renaissance", 
+        "Neoclassicism", 
+        "Classicism"
+    ],
+    "Decorative_and_Ornamental": [
+        "Romanesque", 
+        "Baroque"
     ]
 }
 
