@@ -58,6 +58,43 @@ for classification, styles in STYLE_CLASSIFICATIONS.items():
     for style in styles:
         STYLE_TO_CLASSIFICATION[style] = classification
 
+# Define new category mapping
+NEW_STYLE_CATEGORIES = {
+    "Impressionist_and_Post_Impressionist": [
+        "Impressionism", 
+        "Post-Impressionism"
+    ],
+    "Graphic_and_Pattern_Based": [
+        "Ukiyo-e", 
+        "Pop-Art", 
+        "Art-Nouveau-(Modern)"
+    ],
+    "Geometric_and_Abstract": [
+        "Cubism", 
+        "Abstract-Art"
+    ],
+    "Expressive_and_Emotional": [
+        "Expressionism", 
+        "Surrealism"
+    ],
+    "Figurative_Traditional": [
+        "Early-Renaissance", 
+        "High-Renaissance", 
+        "Neoclassicism", 
+        "Classicism"
+    ],
+    "Decorative_and_Ornamental": [
+        "Romanesque", 
+        "Baroque"
+    ]
+}
+
+# Create a mapping from original style to new category
+STYLE_TO_NEW_CATEGORY = {}
+for new_category, styles in NEW_STYLE_CATEGORIES.items():
+    for style in styles:
+        STYLE_TO_NEW_CATEGORY[style] = new_category
+
 def extract_style_from_path(path):
     """Extract style name from image path."""
     # Handle hierarchical directory structure: .../classification/style/image.jpg
